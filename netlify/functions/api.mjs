@@ -283,13 +283,14 @@ export default async (req) => {
       if (metodo === "POST") {
         const partidas = Array.isArray(cuerpo.partidas) ? cuerpo.partidas : [];
         const [c] = await db.sql`
-          INSERT INTO cotizaciones (folio, cliente_id, vendedor_id, estatus, linea, tipo, tecnico, partidas, ahorro, comentarios, total)
+          INSERT INTO cotizaciones (folio, cliente_id, vendedor_id, estatus, linea, tipo, tecnico, partidas, ahorro, recibo, comentarios, total)
           VALUES (${await siguienteFolio()}, ${num(cuerpo.cliente_id) || null}, ${yo.id},
                   ${limpio(cuerpo.estatus, 20) || "borrador"},
                   ${limpio(cuerpo.linea, 20) || "fotovoltaico"}, ${limpio(cuerpo.tipo, 10) || "formal"},
                   ${JSON.stringify(cuerpo.tecnico || {})}::jsonb,
                   ${JSON.stringify(partidas)}::jsonb,
                   ${JSON.stringify(cuerpo.ahorro || {})}::jsonb,
+                  ${JSON.stringify(cuerpo.recibo || {})}::jsonb,
                   ${limpio(cuerpo.comentarios, 2000)}, ${totalDePartidas(partidas)})
           RETURNING *`;
         return json({ cotizacion: c }, 201);
@@ -307,6 +308,7 @@ export default async (req) => {
             tecnico        = COALESCE(${cuerpo.tecnico ? JSON.stringify(cuerpo.tecnico) : null}::jsonb, tecnico),
             partidas       = ${JSON.stringify(partidas)}::jsonb,
             ahorro         = COALESCE(${cuerpo.ahorro ? JSON.stringify(cuerpo.ahorro) : null}::jsonb, ahorro),
+            recibo         = COALESCE(${cuerpo.recibo ? JSON.stringify(cuerpo.recibo) : null}::jsonb, recibo),
             comentarios    = COALESCE(${limpio(cuerpo.comentarios, 2000)}, comentarios),
             total          = ${totalDePartidas(partidas)},
             actualizado_en = NOW()
@@ -337,6 +339,144 @@ export default async (req) => {
       if (!c) return err("Cotización no encontrada.", 404);
       if (!esDueno(yo) && c.vendedor_id !== yo.id) return err("No tienes acceso a esta cotización.", 403);
       return json({ cotizacion: c });
+    }
+
+
+    /* ============ DATOS DE EJEMPLO (solo dueño) ============ */
+    if (ruta === "demo" && metodo === "POST") {
+      if (!esDueno(yo)) return err("Solo el administrador puede cargar datos de ejemplo.", 403);
+
+      if (cuerpo.accion === "borrar") {
+        await db.sql`DELETE FROM cotizaciones WHERE demo`;
+        await db.sql`DELETE FROM movimientos  WHERE demo`;
+        await db.sql`DELETE FROM clientes     WHERE demo`;
+        return json({ ok: true, mensaje: "Datos de ejemplo eliminados." });
+      }
+
+      const [ya] = await db.sql`SELECT COUNT(*)::int AS n FROM clientes WHERE demo`;
+      if ((ya?.n || 0) > 0) return err("Los datos de ejemplo ya están cargados.", 409);
+
+      const CLIENTES = [
+        ["DIST. DE CARNES FRÍAS ATLICPAC", "Ing. Ramírez", "5544120088", "compras@atlicpac.mx", "Los Reyes La Paz, Edo. Méx.", "513150303467"],
+        ["PLÁSTICOS ALICA, S.A. DE C.V.",   "Lic. Fuentes", "5533914455", "compras@alica.com.mx", "Tlalnepantla, Edo. Méx.", "147911202086"],
+        ["MEXICANA DE EMPAQUES ROHOVI",     "C.P. Vargas",  "5588220134", "admin@rohovi.mx",      "Iztapalapa, CDMX",        "513250503544"],
+        ["INTERALUM",                       "Rafael Chiang","9982114477", "compras@interalum.com","Cancún, Q. Roo",          null],
+        ["HOTEL HYDE",                      "Arq. Beltrán", "5512009988", "mantenimiento@hyde.mx","Polanco, CDMX",           "228140100722"],
+        ["LOBATO JUÁREZ LUCÍA",             null,           "5599881100", null,                   "Nezahualcóyotl, Edo. Méx.","D741860"],
+      ];
+      const ids = [];
+      for (const [nombre, contacto, tel, correo, dir, ref] of CLIENTES) {
+        const [c] = await db.sql`
+          INSERT INTO clientes (nombre, contacto, telefono, correo, direccion, referencia, notas, creado_por, demo)
+          VALUES (${nombre}, ${contacto}, ${tel}, ${correo}, ${dir}, ${ref},
+                  'Cliente de ejemplo para demostración.', ${yo.id}, TRUE)
+          RETURNING id`;
+        ids.push(c.id);
+      }
+
+      const anio = new Date().getFullYear();
+      const [r] = await db.sql`SELECT COUNT(*)::int AS n FROM cotizaciones`;
+      let consecutivo = (r?.n || 0);
+      const folio = () => `MC-${anio}-${String(++consecutivo).padStart(4, "0")}`;
+
+      const COTS = [
+        { cli: 0, linea: "fotovoltaico", tipo: "rapida", estatus: "negociacion",
+          partidas: [{ clave: "SISTEMA-FV", descripcion: "Sistema fotovoltaico interconectado · 300 módulos de 710 W · 213.00 kWp", unidad: "MOD", cantidad: 300, precio: 12500 }],
+          tecnico: { kwp: "213.00", paneles: "300", wpanel: "710", produccion: "57254", tension: "440", marcainversor: "Sungrow" },
+          ahorro: { actual: 294252, nuevo: 206000, roi: 4.3, anual: 1059450 } },
+
+        { cli: 1, linea: "fotovoltaico", tipo: "formal", estatus: "enviada",
+          partidas: [
+            { clave: "PANEL",    descripcion: "Panel fotovoltaico 710 W TIER-1",           unidad: "PZA",  cantidad: 420, precio: 4200 },
+            { clave: "INVERSOR", descripcion: "Inversor Sungrow 110 kW · 440 V",            unidad: "PZA",  cantidad: 3,   precio: 138000 },
+            { clave: "ESTRUCT",  descripcion: "Estructura de aluminio anodizado en cubierta",unidad: "PZA", cantidad: 420, precio: 950 },
+            { clave: "MATELEC",  descripcion: "Material eléctrico y fotovoltaico",           unidad: "kWp", cantidad: 298, precio: 1800 },
+            { clave: "MANOBRA",  descripcion: "Mano de obra calificada y certificada",       unidad: "kWp", cantidad: 298, precio: 2600 }],
+          tecnico: { kwp: "298.20", paneles: "420", wpanel: "710", produccion: "80155", tension: "440", marcainversor: "Sungrow", cubierta: "Lámina", ubicacion: "Tlalnepantla, Edo. Méx." },
+          ahorro: { actual: 747489, nuevo: 512000, roi: 5.1, anual: 2825868 } },
+
+        { cli: 2, linea: "fotovoltaico", tipo: "formal", estatus: "ganada",
+          partidas: [
+            { clave: "PANEL",    descripcion: "Panel fotovoltaico 725 W TIER-1",  unidad: "PZA", cantidad: 957, precio: 4200 },
+            { clave: "INVERSOR", descripcion: "Inversor Huawei 125 kW · 440 V",   unidad: "PZA", cantidad: 6,   precio: 142000 },
+            { clave: "ESTRUCT",  descripcion: "Estructura de aluminio anodizado", unidad: "PZA", cantidad: 957, precio: 950 },
+            { clave: "MANOBRA",  descripcion: "Mano de obra e ingeniería",        unidad: "kWp", cantidad: 693, precio: 2600 }],
+          tecnico: { kwp: "693.83", paneles: "957", wpanel: "725", produccion: "186500", tension: "440", marcainversor: "Huawei", cubierta: "Lámina" },
+          ahorro: { actual: 372342, nuevo: 74000, roi: 4.8, anual: 3580104 } },
+
+        { cli: 3, linea: "perfiles", tipo: "rapida", estatus: "ganada",
+          partidas: [
+            { clave: "001",     descripcion: "RIEL MINI · AL6005-T5 anodizado · 380 mm",     unidad: "PZA", cantidad: 1200, precio: 185 },
+            { clave: "ABZ-INT", descripcion: "Abrazadera intermedia M8x50 · aluminio",       unidad: "PZA", cantidad: 2400, precio: 42 },
+            { clave: "PER-T8",  descripcion: "Perno T M8 con tuerca de brida",               unidad: "PZA", cantidad: 2400, precio: 18 },
+            { clave: "EPDM",    descripcion: "Empaque EPDM 90x70 mm",                        unidad: "PZA", cantidad: 2400, precio: 12 }] },
+
+        { cli: 4, linea: "electrico", tipo: "rapida", estatus: "enviada",
+          partidas: [
+            { clave: "MANTTO",   descripcion: "Mantenimiento preventivo FV", unidad: "SERV", cantidad: 2, precio: 4500 },
+            { clave: "LIMPIEZA", descripcion: "Limpieza profesional de paneles", unidad: "SERV", cantidad: 2, precio: 3800 }] },
+
+        { cli: 5, linea: "fotovoltaico", tipo: "rapida", estatus: "perdida",
+          partidas: [{ clave: "SISTEMA-FV", descripcion: "Sistema fotovoltaico residencial · 9 módulos de 625 W · 5.63 kWp", unidad: "MOD", cantidad: 9, precio: 11500 }],
+          tecnico: { kwp: "5.63", paneles: "9", wpanel: "625", produccion: "1512", tension: "220", marcainversor: "Solis" },
+          ahorro: { actual: 2584, nuevo: 420, roi: 4.0, anual: 25968 } },
+
+        { cli: 0, linea: "perfiles", tipo: "rapida", estatus: "borrador",
+          partidas: [
+            { clave: "002",     descripcion: "RIEL CORTO MINI · AL6005-T5 anodizado · 190 mm", unidad: "PZA", cantidad: 600, precio: 110 },
+            { clave: "ABZ-FIN", descripcion: "Abrazadera final ajustable 30/35/40 mm",         unidad: "PZA", cantidad: 240, precio: 46 }] },
+      ];
+
+      const creadas = [];
+      for (const c of COTS) {
+        const total = c.partidas.reduce((a, p) => a + p.cantidad * p.precio, 0);
+        const [nueva] = await db.sql`
+          INSERT INTO cotizaciones (folio, cliente_id, vendedor_id, estatus, linea, tipo,
+                                    tecnico, partidas, ahorro, comentarios, total, demo)
+          VALUES (${folio()}, ${ids[c.cli]}, ${yo.id}, ${c.estatus}, ${c.linea}, ${c.tipo},
+                  ${JSON.stringify(c.tecnico || {})}::jsonb,
+                  ${JSON.stringify(c.partidas)}::jsonb,
+                  ${JSON.stringify(c.ahorro || {})}::jsonb,
+                  'Cotización de ejemplo para demostración.', ${total}, TRUE)
+          RETURNING id`;
+        creadas.push(nueva.id);
+      }
+
+      const NOTAS = [
+        [0, "negociacion", "Visita técnica realizada. El techo solo admite 300 módulos de los 1,002 que pide el cálculo."],
+        [0, null,          "Enviada la propuesta ajustada. Quedaron de contestar el viernes."],
+        [1, "enviada",     "Se envió por correo a compras. Pidieron desglose de estructura."],
+        [2, "ganada",      "Firmaron contrato. Anticipo depositado."],
+        [5, "perdida",     "Se fue con otro proveedor por precio. Diferencia de 8%."],
+      ];
+      for (const [i, estatus, nota] of NOTAS) {
+        await db.sql`
+          INSERT INTO seguimiento (cotizacion_id, usuario_id, estatus, nota)
+          VALUES (${creadas[i]}, ${yo.id}, ${estatus}, ${nota})`;
+      }
+
+      const MOVS = [
+        ["001",     "entrada", 2000, "Producción recibida del proveedor"],
+        ["001",     "salida",   800, "Obra Rohovi"],
+        ["ABZ-INT", "entrada", 3000, "Compra a proveedor"],
+        ["ABZ-INT", "salida",  2400, "Obra Interalum"],
+        ["002",     "entrada",  900, "Producción recibida"],
+        ["EPDM",    "entrada", 5000, "Compra a proveedor"],
+        ["EPDM",    "salida",  2400, "Obra Interalum"],
+      ];
+      for (const [clave, tipo, cant, motivo] of MOVS) {
+        const [it] = await db.sql`SELECT id, existencia FROM catalogo WHERE clave = ${clave}`;
+        if (!it) continue;
+        const saldo = tipo === "entrada"
+          ? Number(it.existencia) + cant
+          : Math.max(0, Number(it.existencia) - cant);
+        await db.sql`UPDATE catalogo SET existencia = ${saldo}, actualizado_en = NOW() WHERE id = ${it.id}`;
+        await db.sql`
+          INSERT INTO movimientos (item_id, tipo, cantidad, saldo, motivo, usuario_id, demo)
+          VALUES (${it.id}, ${tipo}, ${cant}, ${saldo}, ${motivo}, ${yo.id}, TRUE)`;
+      }
+
+      return json({ ok: true, mensaje: `Se cargaron ${CLIENTES.length} clientes y ${COTS.length} cotizaciones de ejemplo.` });
     }
 
     /* ============ PANEL ============ */

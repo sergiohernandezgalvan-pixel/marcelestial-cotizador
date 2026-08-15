@@ -101,7 +101,8 @@
 <!-- ============ MODAL ============ -->
 <div class="modal" id="modal" hidden>
   <div class="box">
-    <h3 id="modalTitulo"></h3>
+    <div class="modal-head"><h3 id="modalTitulo"></h3>
+      <button class="modal-x" onclick="cerrarModal()" aria-label="Cerrar">&times;</button></div>
     <div class="aviso err" id="modalError"></div>
     <div id="modalCuerpo"></div>
   </div>

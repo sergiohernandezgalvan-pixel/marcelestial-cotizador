@@ -114,13 +114,23 @@ textarea{min-height:84px;resize:vertical}
 .total-row span{font-size:12px;font-weight:700;color:var(--slate);text-transform:uppercase;letter-spacing:.06em}
 .total-row b{font-size:24px;font-weight:800;color:var(--navy2)}
 
+.spec{display:grid;grid-template-columns:1fr;gap:0}
+@media(min-width:620px){.spec{grid-template-columns:1fr 1fr;column-gap:26px}}
+.spec div{display:flex;justify-content:space-between;align-items:baseline;gap:14px;
+  padding:7px 0;border-bottom:1px dotted var(--line);font-size:13px;color:var(--slate)}
+.spec div b{font-weight:700;color:var(--ink);white-space:nowrap;text-align:right}
+
 /* ---------- modal ---------- */
 .modal{position:fixed;inset:0;z-index:60;background:rgba(4,20,46,.55);display:flex;align-items:flex-end;justify-content:center}
 .modal[hidden]{display:none}
 .modal .box{background:#fff;width:100%;max-width:560px;border-radius:20px 20px 0 0;padding:22px 18px;
   max-height:92dvh;overflow:auto;padding-bottom:calc(22px + env(safe-area-inset-bottom))}
 @media(min-width:620px){.modal{align-items:center}.modal .box{border-radius:20px}}
-.modal h3{font-size:17px;font-weight:700;margin-bottom:14px}
+.modal h3{font-size:17px;font-weight:700}
+.modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+.modal-x{background:#F1F5FA;border:0;width:34px;height:34px;border-radius:50%;flex:none;
+  font-size:24px;line-height:1;color:var(--slate);cursor:pointer}
+.modal-x:active{background:var(--line)}
 
 .aviso{padding:11px 13px;border-radius:10px;font-size:13px;margin-bottom:12px;display:none}
 .aviso.on{display:block}
