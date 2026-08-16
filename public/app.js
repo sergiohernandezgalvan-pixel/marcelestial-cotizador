@@ -1,4 +1,5 @@
 /* Cotizador Mar Celestial — app cliente */
+const VERSION = "2026.08.16-6";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -1094,7 +1095,8 @@ function verMas() {
     <div class="card">
       <h3>Mi cuenta</h3>
       <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
-        ${esc(S.yo.nombre)} · ${esc(S.yo.correo)}<br>Perfil: ${esDueno() ? "Administrador general" : "Vendedor"}</p>
+        ${esc(S.yo.nombre)} · ${esc(S.yo.correo)}<br>Perfil: ${esDueno() ? "Administrador general" : "Vendedor"}<br>
+        <span style="font-size:11.5px">Versión ${VERSION}</span></p>
       <div class="acciones">
         <button class="btn sec sm" onclick="formCorreo()">Cambiar correo</button>
         <button class="btn sec sm" onclick="formPassword()">Cambiar contraseña</button>
@@ -1137,9 +1139,10 @@ function verMas() {
     </div>
     <div class="card">
       <h3>Instalar en el celular</h3>
-      <p style="font-size:13px;color:var(--slate)">
+      <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
         Android: menú del navegador → <b>Instalar aplicación</b>.<br>
         iPhone: botón compartir → <b>Agregar a inicio</b>.</p>
+      <button class="btn sec sm" onclick="buscarActualizacion()">Buscar actualización</button>
     </div>`;
 }
 
@@ -1389,6 +1392,21 @@ async function confirmarEliminar(id) {
   } catch (x) { aviso("#modalError", x.message); }
 }
 
+async function buscarActualizacion() {
+  try {
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+    if (window.caches) {
+      const llaves = await caches.keys();
+      await Promise.all(llaves.map((k) => caches.delete(k)));
+    }
+  } catch {}
+  alert("Buscando la versión más reciente. La app se va a recargar.");
+  location.reload(true);
+}
+
 /* ---------------- modal ---------------- */
 function abrirModal(titulo, html) {
   $("#modalTitulo").textContent = titulo;
@@ -1405,6 +1423,7 @@ Object.assign(window, {
   borrarCotizacion, imprimirCotizacion, formCliente, formMovimiento,
   formPassword, verCatalogo, formConcepto, verUsuarios, formUsuario, cerrarModal,
   formRapido, verSeguimiento, datosEjemplo, formCorreo, eliminarUsuario, confirmarEliminar,
+  buscarActualizacion,
 });
 
 /* ---------------- service worker ---------------- */
