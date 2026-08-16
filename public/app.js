@@ -1,5 +1,5 @@
 /* Cotizador Mar Celestial — app cliente */
-const VERSION = "2026.08.16-6";
+const VERSION = "2026.08.16-13";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -316,6 +316,16 @@ function editor() {
       <div id="ahResumen" style="font-size:13px;color:var(--slate)"></div>
     </div>
 
+    ${e._full && e._full.recibo_foto ? `
+    <div class="card">
+      <h3>Foto del recibo</h3>
+      <p style="font-size:11.5px;color:var(--slate);margin-bottom:10px">
+        Respaldo interno. <b>No sale en el PDF del cliente.</b></p>
+      <a href="${e._full.recibo_foto}" target="_blank" rel="noopener">
+        <img src="${e._full.recibo_foto}" alt="Recibo de CFE"
+             style="width:100%;border-radius:10px;border:1px solid #d4dde9"></a>
+    </div>` : ""}
+
     <div class="card">
       <h3>Comentarios</h3>
       <textarea id="edComentarios" placeholder="Requerimientos extra, condiciones especiales…">${esc(e.comentarios)}</textarea>
@@ -324,6 +334,9 @@ function editor() {
     <div class="acciones" style="margin-bottom:30px">
       <button class="btn pri" onclick="guardarCotizacion()">Guardar</button>
       ${e.id ? `<button class="btn sec" onclick="imprimirCotizacion()">Ver / PDF</button>
+                ${e._full && e._full.recibo_foto
+                  ? `<button class="btn sec" onclick="imprimirCotizacion(true)"
+                       title="Uso interno: incluye la foto del recibo">PDF con recibo</button>` : ""}
                 <button class="btn sec" onclick="verSeguimiento(${e.id})">Seguimiento</button>
                 <button class="btn dan" onclick="borrarCotizacion()">Borrar</button>` : ""}
     </div>`;
@@ -434,7 +447,9 @@ async function borrarCotizacion() {
 }
 
 /* ---------------- documento imprimible ---------------- */
-async function imprimirCotizacion() {
+/* conRecibo = true sólo desde el botón "PDF con recibo", que es de uso interno.
+   El PDF que se le manda al cliente nunca lleva la foto de su recibo. */
+async function imprimirCotizacion(conRecibo = false) {
   let c = S.editor._full;
   try { c = (await api("cotizacion/" + S.editor.id)).cotizacion; } catch {}
   const partidas = c.partidas || [];
@@ -486,9 +501,22 @@ async function imprimirCotizacion() {
         ${campo("Pago actual a CFE", ah.actual ? money(ah.actual) : "")}
         ${campo("Pagará con sistema FV", ah.nuevo || ah.nuevo === 0 ? money(ah.nuevo) : "")}
         ${campo("Ahorro por periodo", ah.actual ? money(numero(ah.actual) - numero(ah.nuevo)) : "")}
+        ${campo("Cobertura de su consumo", ah.cobertura ? ah.cobertura + " %" : "")}
         ${campo("Retorno de inversión", ah.roi ? ah.roi + " años" : "")}
         ${campo("Beneficio anual promedio", ah.anual ? money(ah.anual) : "")}
-      </div>` : ""}
+      </div>
+      ${ah.cobertura && Number(ah.cobertura) < 100 ? `
+        <p style="font-size:10.5px;color:#6b7280;margin-top:7px;line-height:1.5">
+          El sistema propuesto cubre el ${ah.cobertura}% de su consumo actual. El resto se seguirá
+          tomando de la red y ya está considerado en el importe indicado arriba. El sistema es
+          ampliable si más adelante desea cubrir un porcentaje mayor.</p>` : ""}` : ""}
+
+      ${conRecibo && c.recibo_foto ? `
+        <div class="recibo-doc">
+          <span>Recibo de CFE proporcionado por el cliente${
+            (c.recibo || {}).periodo ? ` · periodo ${esc(c.recibo.periodo)}` : ""}</span>
+          <img src="${c.recibo_foto}" alt="Recibo de CFE">
+        </div>` : ""}
 
       <h2>Garantías</h2>
       <div class="campos">
@@ -742,51 +770,132 @@ Object.assign(window, { menuNueva, rapidaFV, guardarRapida, guardarRapidaCat, ca
 
 
 /* ================= DIMENSIONAMIENTO DESDE EL RECIBO DE CFE =================
-   Réplica de la hoja "PLANTILLA PAGO DE CONTADO":
-     consumo total  = base + intermedia + punta
+   La tarifa manda: define qué campos se piden y qué precio por panel aplica.
+     consumo total   = base + intermedia + punta   (tarifas horarias)
+                     = consumo capturado           (las demás)
      precio promedio = pago a CFE / consumo total
      consumo por dia = consumo total / dias del periodo
      genera un panel = kW x eficiencia x horas solares
      modulos         = consumo por dia / genera un panel
+     precio unitario = tabla de la tarifa, segun tension y cantidad de modulos
    =========================================================================== */
+
+const paramTar = () => S.config.tarifas || {};
+const listaTarifas = () => paramTar().lista || [];
+const listaHilos = () => paramTar().hilos || [];
+const tarifaDe = (clave) => listaTarifas().find((t) => t.clave === clave) || listaTarifas()[0] || {};
+
+function guiaDeInversores(modulos) {
+  const g = (paramTar().guia_inversores || []);
+  return g.find((x) => modulos >= Number(x.desde) && modulos <= Number(x.hasta)) || null;
+}
+
+function escalonesDe(tar, tension) {
+  return (tar.escalones || [])
+    .filter((e) => e.tension === tension || e.tension === "*")
+    .sort((a, b) => Number(a.hasta) - Number(b.hasta));
+}
+
+function precioDePanel(tar, tension, modulos) {
+  const esc = escalonesDe(tar, tension);
+  if (!esc.length) return 0;
+  const m = esc.find((e) => modulos <= Number(e.hasta));
+  return Number((m || esc[esc.length - 1]).precio) || 0;
+}
+
+/* Arriba del último escalón la tarifa ya no tiene precio definido: se avisa y
+   el vendedor captura el precio a mano. */
+function topeDeTarifa(tar, tension) {
+  const esc = escalonesDe(tar, tension);
+  return esc.length ? Number(esc[esc.length - 1].hasta) : 0;
+}
 
 function calcularDimensionamiento(e) {
   const P = paramDim();
+  const T = paramTar();
+  const tar = tarifaDe(e.tarifa);
   const panel = (P.paneles || []).find((x) => x.clave === e.panel) || (P.paneles || [])[0] || {};
-  const consumo = e.base + e.intermedia + e.punta;
+
+  const consumo = tar.horaria ? (e.base + e.intermedia + e.punta) : e.consumo;
   const dias = e.dias > 0 ? e.dias : 30;
-  const precioKwh = consumo > 0 ? e.pago / consumo : 0;
+  /* El ahorro se valúa con el precio de la energía, no con el total del recibo: el total
+     trae IVA, alumbrado público, cargo por demanda y factor de potencia, que los paneles
+     no eliminan. Si el vendedor no capturó el importe de energía, se usa el total. */
+  const baseImporte = e.energia > 0 ? e.energia : e.pago;
+  const usaEnergia = e.energia > 0;
+  const precioKwh = consumo > 0 ? baseImporte / consumo : 0;
+  const precioTotal = consumo > 0 ? e.pago / consumo : 0;
   const consumoDia = consumo / dias;
   const porPanelDia = (panel.kw || 0) * (panel.eficiencia || 0) * (panel.horas_solares || 0);
   const modulos = porPanelDia > 0 ? consumoDia / porPanelDia : 0;
   const modulosEnteros = Math.ceil(modulos);
   const usar = e.modulosManual > 0 ? e.modulosManual : modulosEnteros;
 
+  const precioSugerido = precioDePanel(tar, e.tension, usar);
+  const precioPanel = e.precioManual > 0 ? e.precioManual : precioSugerido;
+  const tope = topeDeTarifa(tar, e.tension);
+  const fueraDeEscalon = usar > 0 && tope > 0 && usar > tope;
+
+  const guia = guiaDeInversores(usar);
+  const fueraDeGuia = usar > 0 && !guia;
+  const invSugeridos = guia ? Number(guia.inversores) : 0;
+  const inversores = e.inversoresManual > 0 ? e.inversoresManual : invSugeridos;
+  const cobraInv = T.inversor_se_cobra === true;
+  const precioInv = cobraInv && guia ? Number(guia.precio) || 0 : 0;
+  const costoInversores = inversores * precioInv;
+
   const kwp = usar * (panel.kw || 0);
   const superficie = usar * (Number(P.m2_por_panel) || 3.1);
   const produccionDia = usar * porPanelDia;
   const produccionMes = produccionDia * 30;
-  const valor = usar * e.precioPanel;
+  const valor = usar * precioPanel + costoInversores;
 
-  const ahorroMes = produccionMes * precioKwh;
+  /* El ahorro nunca puede ser mayor que el recibo: si el sistema se reduce (por espacio en
+     el techo, por ejemplo) sólo se ahorra lo que se genera; si el sistema alcanza a cubrir
+     todo el consumo, se ahorra el recibo completo y no más. */
+  const consumoMes = consumoDia * 30;
+  /* Qué tanto del recibo alcanza a cubrir el sistema propuesto. Es normal cotizar
+     menos módulos de los que pide el cálculo, por presupuesto o por espacio. */
+  const cobertura = consumoMes > 0 ? Math.min(100, (produccionMes / consumoMes) * 100) : 0;
+  const ahorroMes = Math.min(produccionMes, consumoMes) * precioKwh;
+  /* Lo mismo pero sobre los días reales del recibo, que pueden ser 28 o 63. */
+  const ahorroPeriodo = Math.min(produccionDia * dias, consumo) * precioKwh;
   const ahorroAnual = ahorroMes * 12;
   const ahorro30 = ahorroAnual * 30;
-  const pagoAnual = consumo * precioKwh * 12;
-  const roi = pagoAnual > 0 ? valor / pagoAnual : 0;
+  const pagoAnual = consumoMes * precioKwh * 12;
+  const roi = ahorroAnual > 0 ? valor / ahorroAnual : 0;
 
   const enganche = valor * ((Number(P.enganche_pct) || 0) / 100);
   const plazo = Number(P.plazo_meses) || 120;
   const mensualidad = plazo > 0 ? (valor - enganche) / plazo : 0;
 
-  return { panel, consumo, dias, precioKwh, consumoDia, porPanelDia, modulos, modulosEnteros,
-           usar, kwp, superficie, produccionDia, produccionMes, valor, ahorroMes, ahorroAnual,
-           ahorro30, roi, enganche, plazo, mensualidad };
+  return { tar, panel, consumo, dias, precioKwh, precioTotal, usaEnergia,
+           consumoDia, porPanelDia, modulos, modulosEnteros,
+           usar, precioSugerido, precioPanel, tope, fueraDeEscalon,
+           guia, fueraDeGuia, invSugeridos, inversores,
+           cobraInv, precioInv, costoInversores, kwp, superficie,
+           produccionDia, produccionMes, consumoMes, cobertura,
+           valor, ahorroMes, ahorroPeriodo, ahorroAnual, ahorro30, roi,
+           enganche, plazo, mensualidad };
 }
 
 function rapidaRecibo() {
   const P = paramDim();
+  const tarifas = listaTarifas();
+  if (!tarifas.length) return alert("Todavía no hay tarifas configuradas.");
+  S.rcTarifa = tarifas[0].clave;
+  S.rcValores = {};
+  S.rcFoto = null;
+  pintarRecibo();
+}
+
+function pintarRecibo() {
+  const P = paramDim();
+  const tar = tarifaDe(S.rcTarifa);
+  const esMedia = tar.grupo === "media";
   const paneles = P.paneles || [];
   const opcCli = S.clientes.map((c) => `<option value="${c.id}">${esc(c.nombre)}</option>`).join("");
+
   $("#v-editor").innerHTML = `
     <div class="row between" style="margin-bottom:14px">
       <div><h2 class="tit">Desde el recibo de CFE</h2>
@@ -802,30 +911,113 @@ function rapidaRecibo() {
     </div>
 
     <div class="card">
-      <h3>Datos del recibo</h3>
+      <h3>Tarifa del recibo</h3>
+      <label class="f"><span>Tarifa</span>
+        <select id="rcTarifa" onchange="cambiarTarifa(this.value)">
+          ${listaTarifas().map((t) => `<option value="${esc(t.clave)}" ${t.clave === tar.clave ? "selected" : ""}>${esc(t.nombre)}</option>`).join("")}
+        </select></label>
+      <label class="f"><span>Nº de servicio</span>
+        <input id="rcServicio" inputmode="numeric" placeholder="viene arriba en el recibo"></label>
+
+      ${esMedia ? `
+        <div class="grid2">
+          <label class="f"><span>Tensión de interconexión</span>
+            <select id="rcTension" onchange="calcRecibo()">
+              ${(tar.tensiones || []).map((v) => `<option ${v === "440" ? "selected" : ""}>${v}</option>`).join("")}
+            </select></label>
+          <label class="f"><span>Demanda contratada (kW)</span>
+            <input type="number" id="rcDemanda" value="" inputmode="decimal"></label>
+        </div>`
+      : `
+        <div class="grid2">
+          <label class="f"><span>Hilos</span>
+            <select id="rcHilos" onchange="calcRecibo()">
+              ${listaHilos().map((h) => `<option value="${h.tension}">${esc(h.descripcion)}</option>`).join("")}
+            </select></label>
+          <label class="f"><span>Tensión</span>
+            <input id="rcTensionTxt" readonly value=""></label>
+        </div>`}
+
+      ${(tar.uvie || tar.gestion || (tar.incluye || []).length) ? `
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:2px">
+          ${tar.uvie ? '<span class="badge b-enviada">UVIE incluida</span>' : ""}
+          ${tar.gestion ? '<span class="badge b-enviada">Gestión incluida</span>' : ""}
+          ${(tar.incluye || []).filter((x) => !/gesti/i.test(x))
+            .map((x) => `<span class="badge b-enviada">${esc(x)}</span>`).join("")}
+        </div>
+        <p style="font-size:11.5px;color:var(--slate);margin-top:8px">
+          Van siempre en esta tarifa y su costo ya está considerado en el precio por panel.</p>` : ""}
+    </div>
+
+    <div class="card">
+      <h3>Consumo y pago</h3>
+      ${tar.horaria ? `
+        <div class="grid3">
+          <label class="f"><span>Base (kWh)</span><input type="number" id="rcBase" value="0" inputmode="numeric"></label>
+          <label class="f destaca"><span>Intermedia (kWh)</span><input type="number" id="rcInter" value="0" inputmode="numeric"></label>
+          <label class="f"><span>Punta (kWh)</span><input type="number" id="rcPunta" value="0" inputmode="numeric"></label>
+        </div>
+        <p style="font-size:11.5px;color:var(--slate);margin-top:-4px;margin-bottom:10px">
+          La <b style="color:var(--sky)">intermedia</b> es donde actúan los paneles.</p>`
+      : `
+        <label class="f"><span>Consumo del periodo (kWh)</span>
+          <input type="number" id="rcConsumo" value="0" inputmode="numeric"></label>`}
       <div class="grid2">
-        <label class="f"><span>Consumo base (kWh)</span><input type="number" id="rcBase" value="0" inputmode="numeric"></label>
-        <label class="f"><span>Intermedia (kWh)</span><input type="number" id="rcInter" value="0" inputmode="numeric"></label>
-        <label class="f"><span>Punta (kWh)</span><input type="number" id="rcPunta" value="0" inputmode="numeric"></label>
-        <label class="f"><span>Días del periodo</span><input type="number" id="rcDias" value="${Number(P.dias_periodo) || 30}" inputmode="numeric"></label>
+        <label class="f"><span>Periodo facturado · del</span>
+          <input type="date" id="rcDel" onchange="calcularDias()"></label>
+        <label class="f"><span>al</span>
+          <input type="date" id="rcAl" onchange="calcularDias()"></label>
       </div>
-      <label class="f"><span>Pago actual a CFE ($)</span><input type="number" id="rcPago" value="0" inputmode="decimal"></label>
-      <label class="f"><span>Tarifa (opcional)</span><input id="rcTarifa" placeholder="GDMTH, PDBT, 1C…"></label>
-      <label class="f"><span>Periodo facturado (opcional)</span><input id="rcPeriodo" placeholder="30-JUN-26 AL 31-JUL-26"></label>
+      <div class="grid2">
+        <label class="f"><span>Días del periodo</span>
+          <input type="number" id="rcDias" value="${Number(P.dias_periodo) || 30}" inputmode="numeric"></label>
+        <label class="f"><span>Pago actual a CFE ($)</span>
+          <input type="number" id="rcPago" value="0" inputmode="decimal"></label>
+      </div>
+      <p id="rcDiasNota" style="font-size:11.5px;color:var(--slate);margin-top:-4px;margin-bottom:10px"></p>
+      ${esMedia ? `
+        <label class="f"><span>Importe de energía del desglose ($)</span>
+          <input type="number" id="rcEnergia" placeholder="opcional, pero recomendado" inputmode="decimal"></label>
+        <p style="font-size:11.5px;color:var(--slate);margin-top:-4px">
+          Es el renglón <b>Energía</b> del "Desglose del importe a pagar". Sin él, el precio por kWh
+          sale del total del recibo e incluye IVA, alumbrado público y cargos por demanda, que los
+          paneles no eliminan.</p>` : ""}
     </div>
 
     <div class="card">
       <h3>Equipo</h3>
       <div class="grid2">
-        <label class="f"><span>Tipo de panel</span><select id="rcPanel">
+        <label class="f"><span>Tipo de panel</span><select id="rcPanel" onchange="calcRecibo()">
           ${paneles.map((x) => `<option ${x.clave === "710 W" ? "selected" : ""}>${esc(x.clave)}</option>`).join("")}
         </select></label>
-        <label class="f"><span>Precio por panel ($)</span>
-          <input type="number" id="rcPrecio" value="${Number(P.precio_por_panel) || 0}" ${esDueno() ? "" : "readonly"}></label>
         <label class="f"><span>Módulos a cotizar</span>
           <input type="number" id="rcModulos" placeholder="automático" inputmode="numeric"></label>
-        <div style="align-self:end;padding-bottom:12px;font-size:11.5px;color:var(--slate)">
-          Déjalo vacío para usar el cálculo. Escribe un número si el techo no da para todos.</div>
+        <label class="f"><span>Inversores</span>
+          <input type="number" id="rcInversores" placeholder="automático" inputmode="numeric"></label>
+        <label class="f"><span>Precio por panel ($)</span>
+          <input type="number" id="rcPrecio" placeholder="según tarifa" ${esDueno() ? "" : "readonly"}></label>
+      </div>
+      <p style="font-size:11.5px;color:var(--slate)">
+        Deja vacío lo que quieras que calcule la app. El precio sale de la tabla de la tarifa.</p>
+    </div>
+
+    <div class="card">
+      <h3>Foto del recibo</h3>
+      <p style="font-size:11.5px;color:var(--slate);margin-bottom:12px">
+        Se guarda dentro de la cotización como respaldo.
+        <b>No aparece en el PDF que ve el cliente.</b></p>
+      <div class="foto-caja">
+        <div id="rcFotoPrev"></div>
+        <div style="flex:1">
+          <input type="file" accept="image/*" capture="environment" id="rcFoto" hidden>
+          <div class="acciones">
+            <button class="btn sec sm" type="button" onclick="document.getElementById('rcFoto').click()">
+              Tomar o elegir foto</button>
+            <button class="btn dan sm" type="button" id="rcFotoQuitar" onclick="quitarFoto()" hidden>
+              Quitar</button>
+          </div>
+          <p id="rcFotoNota" style="font-size:11px;color:var(--slate);margin-top:8px"></p>
+        </div>
       </div>
     </div>
 
@@ -839,18 +1031,129 @@ function rapidaRecibo() {
   $("#v-editor").hidden = false;
   $("#fab").hidden = true;
   window.scrollTo(0, 0);
-  ["rcBase","rcInter","rcPunta","rcDias","rcPago","rcPanel","rcPrecio","rcModulos"]
-    .forEach((id) => { const n = $("#" + id); if (n) n.addEventListener("input", calcRecibo); });
-  $("#rcPanel").addEventListener("change", calcRecibo);
+  ["rcBase","rcInter","rcPunta","rcConsumo","rcDias","rcPago","rcModulos","rcInversores","rcPrecio","rcDemanda","rcEnergia","rcServicio"]
+    .forEach((id) => { const n = $("#" + id); if (n) n.addEventListener("input", () => { recordarRecibo(); calcRecibo(); }); });
+  $("#rcFoto")?.addEventListener("change", tomarFoto);
+  pintarFoto();
   calcRecibo();
+}
+
+/* ---- foto del recibo: se comprime en el teléfono antes de guardarla ---- */
+async function comprimirImagen(archivo, lado = 1400, calidad = 0.72) {
+  const mapa = await createImageBitmap(archivo);
+  const escala = Math.min(1, lado / Math.max(mapa.width, mapa.height));
+  const ancho = Math.max(1, Math.round(mapa.width * escala));
+  const alto = Math.max(1, Math.round(mapa.height * escala));
+  const lienzo = document.createElement("canvas");
+  lienzo.width = ancho; lienzo.height = alto;
+  lienzo.getContext("2d").drawImage(mapa, 0, 0, ancho, alto);
+  mapa.close?.();
+  return lienzo.toDataURL("image/jpeg", calidad);
+}
+
+async function tomarFoto(ev) {
+  const archivo = ev.target.files && ev.target.files[0];
+  if (!archivo) return;
+  try {
+    let datos = await comprimirImagen(archivo);
+    if (datos.length > 1400000) datos = await comprimirImagen(archivo, 1000, 0.6);
+    S.rcFoto = datos;
+    pintarFoto();
+  } catch {
+    aviso("#rcAviso", "No se pudo leer la imagen. Intenta con otra foto.");
+  } finally { ev.target.value = ""; }
+}
+
+window.quitarFoto = () => { S.rcFoto = null; pintarFoto(); };
+
+function pintarFoto() {
+  const caja = $("#rcFotoPrev"); if (!caja) return;
+  const quitar = $("#rcFotoQuitar"), nota = $("#rcFotoNota");
+  if (S.rcFoto) {
+    caja.innerHTML = `<img src="${S.rcFoto}" alt="Recibo de CFE">`;
+    if (quitar) quitar.hidden = false;
+    if (nota) nota.textContent = "Guardada · " + Math.round(S.rcFoto.length / 1400) + " KB aprox.";
+  } else {
+    caja.innerHTML = '<div class="foto-vacia">Sin foto</div>';
+    if (quitar) quitar.hidden = true;
+    if (nota) nota.textContent = "Opcional, pero sirve mucho para aclarar dudas después.";
+  }
+}
+
+const CAMPOS_RC = ["rcCliente","rcServicio","rcDias","rcPago","rcDel","rcAl","rcDemanda","rcConsumo",
+                   "rcEnergia","rcBase","rcInter","rcPunta","rcModulos","rcInversores","rcPrecio","rcPanel"];
+
+/* Los días salen de las fechas del recibo, pero quedan editables. */
+const soloFecha = (v) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v || ""));
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
+};
+
+window.calcularDias = () => {
+  const a = soloFecha($("#rcDel")?.value), b = soloFecha($("#rcAl")?.value);
+  const nota = $("#rcDiasNota");
+  if (!a || !b) { if (nota) nota.textContent = ""; return; }
+  const dias = Math.round((b - a) / 86400000);
+  if (dias <= 0) {
+    if (nota) nota.textContent = "La fecha final debe ser posterior a la inicial.";
+    return;
+  }
+  if ($("#rcDias")) $("#rcDias").value = dias;
+  if (nota) nota.textContent = `${dias} días de facturación. Puedes corregirlo si el recibo dice otra cosa.`;
+  recordarRecibo();
+  calcRecibo();
+};
+
+const MESES = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+function periodoTexto() {
+  const a = soloFecha($("#rcDel")?.value), b = soloFecha($("#rcAl")?.value);
+  if (!a || !b) return "";
+  const f = (d) => `${d.getDate()} ${MESES[d.getMonth()]} ${d.getFullYear()}`;
+  return `${f(a)} al ${f(b)}`;
+}
+
+function recordarRecibo() {
+  S.rcValores = S.rcValores || {};
+  CAMPOS_RC.forEach((id) => { const n = $("#" + id); if (n) S.rcValores[id] = n.value; });
+}
+
+function restaurarRecibo() {
+  const v = S.rcValores || {};
+  CAMPOS_RC.forEach((id) => {
+    const n = $("#" + id);
+    if (n && v[id] !== undefined && v[id] !== "") n.value = v[id];
+  });
+}
+
+window.cambiarTarifa = (clave) => {
+  recordarRecibo();
+  S.rcTarifa = clave;
+  pintarRecibo();
+  restaurarRecibo();
+  calcularDias();
+  calcRecibo();
+};
+
+function tensionActual() {
+  if ($("#rcTension")) return $("#rcTension").value;
+  if ($("#rcHilos")) return $("#rcHilos").value;
+  return "*";
 }
 
 function datosRecibo() {
   return {
-    base: numero($("#rcBase").value), intermedia: numero($("#rcInter").value),
-    punta: numero($("#rcPunta").value), dias: numero($("#rcDias").value),
-    pago: numero($("#rcPago").value), panel: $("#rcPanel").value,
-    precioPanel: numero($("#rcPrecio").value), modulosManual: numero($("#rcModulos").value),
+    tarifa: S.rcTarifa,
+    tension: tensionActual(),
+    demanda: numero($("#rcDemanda")?.value),
+    base: numero($("#rcBase")?.value), intermedia: numero($("#rcInter")?.value),
+    punta: numero($("#rcPunta")?.value), consumo: numero($("#rcConsumo")?.value),
+    dias: numero($("#rcDias")?.value), pago: numero($("#rcPago")?.value),
+    energia: numero($("#rcEnergia")?.value),
+    servicio: ($("#rcServicio")?.value || "").trim(),
+    panel: $("#rcPanel")?.value,
+    modulosManual: numero($("#rcModulos")?.value),
+    inversoresManual: numero($("#rcInversores")?.value),
+    precioManual: numero($("#rcPrecio")?.value),
   };
 }
 
@@ -860,6 +1163,8 @@ function calcRecibo() {
   const n = (v, dec = 2) => Number(v || 0).toLocaleString("es-MX",
     { minimumFractionDigits: dec, maximumFractionDigits: dec });
   const ajustado = d.modulosManual > 0 && d.modulosManual !== r.modulosEnteros;
+  const precioTocado = d.precioManual > 0 && d.precioManual !== r.precioSugerido;
+  if ($("#rcTensionTxt")) $("#rcTensionTxt").value = d.tension + " V";
 
   $("#rcResultado").innerHTML = `
     <h3>Resultado del dimensionamiento</h3>
@@ -867,17 +1172,43 @@ function calcRecibo() {
       <div class="kpi"><b>${n(r.usar, 0)}</b><span>Módulos</span></div>
       <div class="kpi"><b>${n(r.kwp)}</b><span>kWp</span></div>
       <div class="kpi"><b>${n(r.superficie, 0)}</b><span>m² requeridos</span></div>
+      <div class="kpi"><b>${n(r.cobertura, 0)}%</b><span>de su recibo</span></div>
     </div>
-    ${ajustado ? `<div style="font-size:12px;color:var(--warn);margin-bottom:12px">
-      El cálculo pedía <b>${n(r.modulosEnteros, 0)}</b> módulos; estás cotizando <b>${n(r.usar, 0)}</b>.</div>` : ""}
+    ${ajustado ? `<div style="font-size:12.5px;background:#E9F1FB;border-radius:10px;padding:11px 13px;margin-bottom:12px">
+      El cálculo pedía <b>${n(r.modulosEnteros, 0)}</b> módulos; estás cotizando <b>${n(r.usar, 0)}</b>.
+      Este sistema cubre el <b>${n(r.cobertura, 0)}%</b> de su consumo: el cliente seguirá pagando
+      alrededor de <b>${money(Math.max(0, r.consumo * r.precioKwh - r.ahorroMes))}</b> por periodo.
+      Se puede ampliar después.</div>` : ""}
+    ${precioTocado ? `<div style="font-size:12px;color:var(--warn);margin-bottom:10px">
+      La tarifa marca <b>${money(r.precioSugerido)}</b> por panel; estás usando <b>${money(r.precioPanel)}</b>.</div>` : ""}
+    ${r.fueraDeEscalon ? `<div style="font-size:12.5px;color:var(--warn);background:#FBF0E2;border-radius:10px;
+      padding:11px 13px;margin-bottom:12px">
+      <b>Fuera de la tabla de precios.</b> La tarifa ${esc(r.tar.clave || "")} tiene precio hasta
+      ${Number(r.tope).toLocaleString("es-MX")} paneles y este proyecto pide ${n(r.usar, 0)}.
+      Se está usando el precio del último escalón; confírmalo o captúralo a mano.</div>` : ""}
+    ${r.fueraDeGuia ? `<div style="font-size:12.5px;color:var(--bad);background:#FBE4E2;border-radius:10px;
+      padding:11px 13px;margin-bottom:12px">
+      <b>Requiere revisión de ingeniería.</b> La guía de inversores llega hasta 1,000 módulos y este
+      proyecto pide ${n(r.usar, 0)}. Captura los inversores a mano.</div>` : ""}
+    ${r.guia ? `<div style="font-size:12.5px;background:#E9F1FB;border-radius:10px;padding:11px 13px;margin-bottom:12px">
+      <b>${r.guia.inversores} inversor${r.guia.inversores === 1 ? "" : "es"} ${esc(paramTar().guia_marca || "")} ${esc(r.guia.modelo)}</b>
+      · ${esc(r.guia.capacidad_ac)}<br>
+      <span style="color:var(--slate)">${esc(r.guia.nota)}${r.cobraInv && r.precioInv > 0
+        ? ` · ${money(r.precioInv)} c/u` : " · incluido en el precio por panel"}</span></div>` : ""}
 
     <div class="spec" style="margin-bottom:6px">
+      <div><span>Tarifa</span><b>${esc(r.tar.clave || "")} · ${esc(d.tension)} V</b></div>
       <div><span>Consumo total</span><b>${n(r.consumo, 0)} kWh</b></div>
-      <div><span>Precio promedio</span><b>$${n(r.precioKwh, 4)} / kWh</b></div>
+      <div><span>${r.usaEnergia ? "Precio de la energía" : "Precio promedio del recibo"}</span>
+        <b>$${n(r.precioKwh, 4)} / kWh</b></div>
+      ${r.usaEnergia ? `<div><span>Promedio del recibo completo</span>
+        <b style="font-weight:600;color:var(--slate)">$${n(r.precioTotal, 4)} / kWh</b></div>` : ""}
       <div><span>Consumo por día</span><b>${n(r.consumoDia)} kWh</b></div>
       <div><span>Genera un panel al día</span><b>${n(r.porPanelDia, 4)} kWh</b></div>
-      <div><span>Producción del sistema</span><b>${n(r.produccionDia, 0)} kWh/día</b></div>
       <div><span>Producción mensual</span><b>${n(r.produccionMes, 0)} kWh</b></div>
+      <div><span>Inversores</span><b>${r.inversores > 0 ? n(r.inversores, 0) : "por definir"}${
+        r.guia && r.inversores === r.invSugeridos ? " · " + esc(r.guia.capacidad_ac) : ""}</b></div>
+      <div><span>Precio por panel</span><b>${money(r.precioPanel)}</b></div>
     </div>
 
     <div class="total-row"><span>Valor del proyecto</span><b>${money(r.valor)}</b></div>
@@ -903,27 +1234,53 @@ async function guardarRecibo() {
   const r = calcularDimensionamiento(d);
   if (!(r.usar > 0) || !(r.valor > 0))
     return aviso("#rcAviso", "Captura el consumo y el pago a CFE para poder calcular.");
+  const P = paramDim();
   try {
     const { cotizacion } = await api("cotizaciones", { method: "POST", body: {
       cliente_id: cliente, estatus: "borrador", linea: "fotovoltaico", tipo: "rapida",
-      partidas: [{
-        clave: "SISTEMA-FV",
-        descripcion: `Sistema fotovoltaico interconectado · ${r.usar} módulos de ${r.panel.clave} · ${r.kwp.toFixed(2)} kWp`,
-        unidad: "MOD", cantidad: r.usar, precio: d.precioPanel,
-      }],
+      recibo_foto: S.rcFoto || null,
+      partidas: [
+        { clave: "SISTEMA-FV",
+          descripcion: `Sistema fotovoltaico interconectado · ${r.usar} módulos de ${r.panel.clave} · ${r.kwp.toFixed(2)} kWp · tarifa ${r.tar.clave} en ${d.tension} V`
+            + ((r.tar.incluye || []).length
+                ? ` · Incluye ${r.tar.incluye.map((x) => x.charAt(0).toLowerCase() + x.slice(1)).join(" y ")}`
+                : ""),
+          unidad: "MOD", cantidad: r.usar, precio: r.precioPanel },
+        ...(r.cobraInv && r.precioInv > 0 ? [{
+          clave: "INVERSOR",
+          descripcion: `Inversor ${(paramTar().guia_marca || "")} ${r.guia ? r.guia.modelo : ""} · ${r.guia ? r.guia.capacidad_ac : ""}`.trim(),
+          unidad: "PZA", cantidad: r.inversores, precio: r.precioInv }] : []),
+      ],
       tecnico: {
         kwp: r.kwp.toFixed(2), paneles: String(r.usar),
         wpanel: String(Math.round((r.panel.kw || 0) * 1000)),
+        inversores: String(r.inversores), tension: d.tension,
+        capinversor: r.guia ? r.guia.capacidad_ac : "",
+        marcainversor: r.guia ? ((paramTar().guia_marca || "") + " " + r.guia.modelo).trim() : "",
         produccion: String(Math.round(r.produccionMes * 2)),
-        tension: "", marcainversor: "",
       },
       ahorro: {
-        actual: Math.round(r.consumo * r.precioKwh), nuevo: 0,
+        actual: Math.round(d.pago),
+        nuevo: Math.max(0, Math.round(d.pago - r.ahorroPeriodo)),
+        cobertura: Math.round(r.cobertura),
         roi: Number(r.roi.toFixed(1)), anual: Math.round(r.ahorroAnual),
       },
       recibo: {
-        base: d.base, intermedia: d.intermedia, punta: d.punta, dias: d.dias,
-        pago: d.pago, tarifa: $("#rcTarifa").value, periodo: $("#rcPeriodo").value,
+        tarifa: r.tar.clave, tarifa_nombre: r.tar.nombre, grupo: r.tar.grupo,
+        tension: d.tension, hilos: $("#rcHilos") ? $("#rcHilos").selectedIndex + 1 : null,
+        demanda_contratada: d.demanda || null,
+        base: d.base, intermedia: d.intermedia, punta: d.punta,
+        consumo_total: Math.round(r.consumo), dias: d.dias, pago: d.pago,
+        no_servicio: d.servicio || null,
+        importe_energia: d.energia || null,
+        precio_kwh_base: r.usaEnergia ? "energía" : "total del recibo",
+        periodo: periodoTexto(),
+        periodo_del: $("#rcDel")?.value || null, periodo_al: $("#rcAl")?.value || null,
+        uvie: !!r.tar.uvie, gestion: !!r.tar.gestion,
+        inversores: r.inversores, inversor_modelo: r.guia ? r.guia.modelo : null,
+        inversor_capacidad: r.guia ? r.guia.capacidad_ac : null,
+        inversor_aplicacion: r.guia ? r.guia.nota : null,
+        inversor_cobrado: r.cobraInv, revision_ingenieria: r.fueraDeGuia,
         precio_kwh: Number(r.precioKwh.toFixed(4)), consumo_dia: Math.round(r.consumoDia),
         superficie_m2: Math.round(r.superficie), produccion_mes: Math.round(r.produccionMes),
         ahorro_mes: Math.round(r.ahorroMes), ahorro_30: Math.round(r.ahorro30),
@@ -949,13 +1306,13 @@ function formDimensionamiento() {
   abrirModal("Parámetros del dimensionamiento", `
     <form id="fDim">
       <div class="grid2">
-        ${campo("precio_por_panel", "Precio por panel")}
         ${campo("m2_por_panel", "m² por panel")}
         ${campo("dias_periodo", "Días del periodo", "1")}
         ${campo("enganche_pct", "Enganche %", "1")}
         ${campo("plazo_meses", "Plazo en meses", "1")}
+
       </div>
-      <div style="font-family:inherit;font-weight:700;font-size:13px;margin:14px 0 8px">Tipos de panel</div>
+      <div style="font-weight:700;font-size:13px;margin:14px 0 8px">Tipos de panel</div>
       ${paneles.map((x, i) => `
         <div class="grid3" style="gap:8px;margin-bottom:8px">
           <label class="f" style="margin:0"><span>Clave</span><input name="p${i}_clave" value="${esc(x.clave)}"></label>
@@ -970,9 +1327,10 @@ function formDimensionamiento() {
     ev.preventDefault();
     const d = Object.fromEntries(new FormData(ev.target));
     const valor = {
-      precio_por_panel: numero(d.precio_por_panel), m2_por_panel: numero(d.m2_por_panel),
-      dias_periodo: numero(d.dias_periodo), enganche_pct: numero(d.enganche_pct),
-      plazo_meses: numero(d.plazo_meses), iva_incluido: P.iva_incluido !== false,
+      precio_por_panel: Number(P.precio_por_panel) || 0,
+      m2_por_panel: numero(d.m2_por_panel), dias_periodo: numero(d.dias_periodo),
+      enganche_pct: numero(d.enganche_pct), plazo_meses: numero(d.plazo_meses),
+      iva_incluido: P.iva_incluido !== false,
       paneles: paneles.map((_, i) => ({
         clave: d[`p${i}_clave`], kw: numero(d[`p${i}_kw`]),
         eficiencia: numero(d[`p${i}_ef`]), horas_solares: numero(d[`p${i}_hs`]),
@@ -987,7 +1345,117 @@ function formDimensionamiento() {
   });
 }
 
-Object.assign(window, { rapidaRecibo, guardarRecibo, calcRecibo, formDimensionamiento, calcularDimensionamiento });
+/* ---- tarifas y precios por panel (solo dueño) ---- */
+function formTarifas() {
+  const T = paramTar();
+  const lista = T.lista || [];
+  abrirModal("Tarifas y precio por panel", `
+    <p style="font-size:12.5px;color:var(--slate);margin-bottom:14px">
+      El precio se resuelve por tarifa, tensión y cantidad de módulos. "Hasta" es el tope de
+      módulos de ese escalón.</p>
+    <form id="fTar">
+      ${lista.map((t, i) => `
+        <div class="card" style="box-shadow:none;margin-bottom:10px">
+          <h3 style="font-size:13.5px">${esc(t.nombre)}</h3>
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:10px">
+            <label style="font-size:12px;display:flex;align-items:center;gap:6px">
+              <input type="checkbox" name="t${i}_uvie" ${t.uvie ? "checked" : ""} style="width:auto"> UVIE</label>
+            <label style="font-size:12px;display:flex;align-items:center;gap:6px">
+              <input type="checkbox" name="t${i}_gestion" ${t.gestion ? "checked" : ""} style="width:auto"> Gestión</label>
+            <label style="font-size:12px;display:flex;align-items:center;gap:6px">
+              <input type="checkbox" name="t${i}_horaria" ${t.horaria ? "checked" : ""} style="width:auto"> Horaria</label>
+          </div>
+          ${(t.escalones || []).map((e, j) => `
+            <div class="grid3" style="gap:8px;margin-bottom:6px">
+              <label class="f" style="margin:0"><span>Tensión</span>
+                <input name="t${i}e${j}_tension" value="${esc(e.tension)}"></label>
+              <label class="f" style="margin:0"><span>Hasta módulos</span>
+                <input name="t${i}e${j}_hasta" type="number" value="${Number(e.hasta)}"></label>
+              <label class="f" style="margin:0"><span>Precio</span>
+                <input name="t${i}e${j}_precio" type="number" value="${Number(e.precio)}"></label>
+            </div>`).join("")}
+        </div>`).join("")}
+      <button class="btn pri full" type="submit">Guardar tarifas</button>
+    </form>`);
+  $("#fTar").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const d = Object.fromEntries(new FormData(ev.target));
+    const valor = { ...T, lista: lista.map((t, i) => ({
+      ...t,
+      uvie: !!d[`t${i}_uvie`], gestion: !!d[`t${i}_gestion`], horaria: !!d[`t${i}_horaria`],
+      escalones: (t.escalones || []).map((e, j) => ({
+        tension: d[`t${i}e${j}_tension`],
+        hasta: numero(d[`t${i}e${j}_hasta`]),
+        precio: numero(d[`t${i}e${j}_precio`]),
+      })),
+    })) };
+    try {
+      await api("config", { method: "PATCH", body: { clave: "tarifas", valor } });
+      await cargarConfig();
+      cerrarModal();
+      alert("Tarifas actualizadas.");
+    } catch (x) { aviso("#modalError", x.message); }
+  });
+}
+
+/* ---- guía de inversores (solo dueño) ---- */
+function formInversores() {
+  const T = paramTar();
+  const g = T.guia_inversores || [];
+  if (!g.length) return alert("Todavía no hay guía de inversores cargada.");
+  abrirModal("Guía de inversores", `
+    <p style="font-size:12.5px;color:var(--slate);margin-bottom:14px">
+      La app elige el inversor por cantidad de paneles. Arriba de ${Number(g[g.length - 1].hasta).toLocaleString("es-MX")}
+      paneles avisa que requiere revisión de ingeniería.</p>
+    <form id="fInv">
+      <label class="f"><span>Marca</span>
+        <input name="marca" value="${esc(T.guia_marca || "")}"></label>
+      <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin:4px 0 14px">
+        <input type="checkbox" name="cobra" id="invCobra" style="width:auto"
+          ${T.inversor_se_cobra ? "checked" : ""}>
+        Cobrar el inversor como partida aparte</label>
+      <div id="invPrecios" style="${T.inversor_se_cobra ? "" : "display:none"}">
+        <div class="grid2" style="gap:8px;margin-bottom:10px">
+          <label class="f" style="margin:0"><span>Poner este precio en todos</span>
+            <input type="number" id="invTodos" placeholder="0"></label>
+          <button class="btn sm" type="button" onclick="invAplicarTodos()"
+            style="align-self:end;margin-bottom:2px">Aplicar</button>
+        </div>
+        ${g.map((x, i) => `
+          <div class="grid2" style="gap:8px;margin-bottom:6px;align-items:end">
+            <div style="font-size:12px;color:var(--slate);line-height:1.35">
+              <b style="color:var(--ink)">${Number(x.desde).toLocaleString("es-MX")}–${Number(x.hasta).toLocaleString("es-MX")} paneles</b><br>
+              ${x.inversores} × ${esc(x.modelo)} · ${esc(x.capacidad_ac)}</div>
+            <label class="f" style="margin:0"><span>Precio c/u</span>
+              <input class="invP" name="p${i}" type="number" value="${Number(x.precio) || 0}"></label>
+          </div>`).join("")}
+      </div>
+      <button class="btn pri full" type="submit">Guardar guía</button>
+    </form>`);
+  $("#invCobra").addEventListener("change", (ev) => {
+    $("#invPrecios").style.display = ev.target.checked ? "" : "none";
+  });
+  $("#fInv").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const d = Object.fromEntries(new FormData(ev.target));
+    const valor = { ...T, guia_marca: String(d.marca || "").trim(), inversor_se_cobra: !!d.cobra,
+      guia_inversores: g.map((x, i) => ({ ...x, precio: numero(d[`p${i}`]) })) };
+    try {
+      await api("config", { method: "PATCH", body: { clave: "tarifas", valor } });
+      await cargarConfig();
+      cerrarModal();
+      alert("Guía de inversores actualizada.");
+    } catch (x) { aviso("#modalError", x.message); }
+  });
+}
+window.invAplicarTodos = () => {
+  const v = $("#invTodos")?.value;
+  if (v === "" || v === undefined) return;
+  document.querySelectorAll(".invP").forEach((i) => { i.value = v; });
+};
+
+Object.assign(window, { rapidaRecibo, guardarRecibo, calcRecibo, formDimensionamiento,
+                        calcularDimensionamiento, formTarifas, formInversores, pintarRecibo });
 
 /* ---------------- clientes ---------------- */
 function verClientes() {
@@ -1120,6 +1588,19 @@ function verMas() {
       <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
         Precio por panel, m² por módulo, enganche, plazo y las características de cada tipo de panel.</p>
       <button class="btn pri sm" onclick="formDimensionamiento()">Configurar parámetros</button>
+    </div>
+    <div class="card">
+      <h3>Tarifas y precio por panel</h3>
+      <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
+        GDMTH, GDMTO y doméstica, con su precio por tensión y por cantidad de módulos.</p>
+      <button class="btn pri sm" onclick="formTarifas()">Configurar tarifas</button>
+    </div>
+    <div class="card">
+      <h3>Guía de inversores</h3>
+      <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
+        Cuántos inversores lleva cada rango de paneles y qué modelo. Hoy el inversor va incluido en
+        el precio por panel; si cambias de marca o suben los precios, aquí lo cobras por separado.</p>
+      <button class="btn pri sm" onclick="formInversores()">Configurar inversores</button>
     </div>
     <div class="card">
       <h3>Vendedores</h3>
@@ -1423,7 +1904,7 @@ Object.assign(window, {
   borrarCotizacion, imprimirCotizacion, formCliente, formMovimiento,
   formPassword, verCatalogo, formConcepto, verUsuarios, formUsuario, cerrarModal,
   formRapido, verSeguimiento, datosEjemplo, formCorreo, eliminarUsuario, confirmarEliminar,
-  buscarActualizacion,
+  buscarActualizacion, formTarifas,
 });
 
 /* ---------------- service worker ---------------- */

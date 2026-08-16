@@ -1,6 +1,6 @@
 import {
   db, json, err, hashPassword, verifyPassword, signToken,
-  sesion, esDueno, num, limpio, siguienteFolio, totalDePartidas,
+  sesion, esDueno, num, limpio, siguienteFolio, totalDePartidas, fotoValida,
 } from "../lib/core.mjs";
 
 export const config = { path: "/api/*" };
@@ -333,7 +333,7 @@ export default async (req) => {
       if (metodo === "POST") {
         const partidas = Array.isArray(cuerpo.partidas) ? cuerpo.partidas : [];
         const [c] = await db.sql`
-          INSERT INTO cotizaciones (folio, cliente_id, vendedor_id, estatus, linea, tipo, tecnico, partidas, ahorro, recibo, comentarios, total)
+          INSERT INTO cotizaciones (folio, cliente_id, vendedor_id, estatus, linea, tipo, tecnico, partidas, ahorro, recibo, recibo_foto, comentarios, total)
           VALUES (${await siguienteFolio()}, ${num(cuerpo.cliente_id) || null}, ${yo.id},
                   ${limpio(cuerpo.estatus, 20) || "borrador"},
                   ${limpio(cuerpo.linea, 20) || "fotovoltaico"}, ${limpio(cuerpo.tipo, 10) || "formal"},
@@ -341,6 +341,7 @@ export default async (req) => {
                   ${JSON.stringify(partidas)}::jsonb,
                   ${JSON.stringify(cuerpo.ahorro || {})}::jsonb,
                   ${JSON.stringify(cuerpo.recibo || {})}::jsonb,
+                  ${fotoValida(cuerpo.recibo_foto)},
                   ${limpio(cuerpo.comentarios, 2000)}, ${totalDePartidas(partidas)})
           RETURNING *`;
         return json({ cotizacion: c }, 201);
@@ -359,6 +360,8 @@ export default async (req) => {
             partidas       = ${JSON.stringify(partidas)}::jsonb,
             ahorro         = COALESCE(${cuerpo.ahorro ? JSON.stringify(cuerpo.ahorro) : null}::jsonb, ahorro),
             recibo         = COALESCE(${cuerpo.recibo ? JSON.stringify(cuerpo.recibo) : null}::jsonb, recibo),
+            recibo_foto    = CASE WHEN ${cuerpo.recibo_foto === "" ? true : false} THEN NULL
+                                  ELSE COALESCE(${fotoValida(cuerpo.recibo_foto)}, recibo_foto) END,
             comentarios    = COALESCE(${limpio(cuerpo.comentarios, 2000)}, comentarios),
             total          = ${totalDePartidas(partidas)},
             actualizado_en = NOW()

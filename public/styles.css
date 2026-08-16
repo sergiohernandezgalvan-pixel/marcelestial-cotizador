@@ -85,6 +85,9 @@ input:focus,select:focus,textarea:focus{border-color:var(--sky);box-shadow:0 0 0
 input[readonly]{background:#F1F5FA;color:var(--slate)}
 textarea{min-height:84px;resize:vertical}
 
+/* El atributo hidden debe ganarle a cualquier display propio (los .btn son inline-flex) */
+[hidden]{display:none !important}
+
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;border:0;border-radius:11px;
   padding:12px 18px;font-size:15px;font-weight:700;cursor:pointer;text-decoration:none}
 .btn.pri{background:var(--blue);color:#fff}
@@ -161,3 +164,20 @@ textarea{min-height:84px;resize:vertical}
 #doc .campos div{display:flex;justify-content:space-between;border-bottom:1px dotted #cfdcee;padding:4px 0}
 #doc .campos b{font-weight:700}
 #doc .pie{margin-top:22px;border-top:1px solid #dbe4ef;padding-top:10px;font-size:10px;color:#6b7280;line-height:1.5}
+
+/* Campo destacado: la intermedia del recibo, que es donde actúan los paneles */
+label.f.destaca{background:#E9F1FB;border:1px solid #BBD4EE;border-radius:10px;padding:8px 10px 4px}
+label.f.destaca>span{color:var(--blue);font-weight:800}
+
+/* Foto del recibo — respaldo interno, nunca se imprime en el PDF del cliente */
+.foto-caja{display:flex;gap:12px;align-items:flex-start}
+.foto-caja img{width:96px;height:96px;object-fit:cover;border-radius:10px;border:1px solid #d4dde9}
+.foto-vacia{width:96px;height:96px;border-radius:10px;border:1px dashed #b9c6d6;display:flex;
+  align-items:center;justify-content:center;color:#8fa0b4;font-size:11px;text-align:center;padding:6px}
+
+/* Recibo de CFE dentro del PDF interno (botón "PDF con recibo") */
+#doc .recibo-doc{margin-top:14px;border:1px solid #dbe4ef;border-radius:8px;padding:8px;
+  break-inside:avoid;page-break-inside:avoid}
+#doc .recibo-doc span{display:block;font-size:10px;color:#6b7280;margin-bottom:6px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.4px}
+#doc .recibo-doc img{width:100%;max-height:3.4in;object-fit:contain;display:block}

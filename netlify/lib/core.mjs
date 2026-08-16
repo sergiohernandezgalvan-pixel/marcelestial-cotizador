@@ -102,3 +102,14 @@ export function totalDePartidas(partidas) {
     0
   );
 }
+
+/* Foto del recibo: sólo se acepta una imagen en formato data URL y con un tamaño
+   razonable. Cualquier otra cosa se descarta, para que nadie meta basura en la
+   base de datos. Alrededor de 4 MB de texto equivalen a 3 MB de imagen. */
+export function fotoValida(v) {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (!/^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(s)) return null;
+  if (s.length > 4_000_000) return null;
+  return s;
+}
