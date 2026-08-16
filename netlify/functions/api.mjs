@@ -125,6 +125,34 @@ export default async (req) => {
           WHERE id = ${id}`;
         return json({ ok: true });
       }
+      if (metodo === "DELETE") {
+        const id = num(url.searchParams.get("id"));
+        const transferir = num(url.searchParams.get("transferir"));
+        if (!id) return err("Falta indicar el vendedor.");
+        if (id === yo.id) return err("No puedes eliminar tu propia cuenta.");
+
+        const [u] = await db.sql`SELECT id, nombre, rol FROM usuarios WHERE id = ${id}`;
+        if (!u) return err("Ese vendedor ya no existe.", 404);
+
+        if (u.rol === "owner") {
+          const [q] = await db.sql`SELECT COUNT(*)::int AS n FROM usuarios WHERE rol = 'owner' AND activo`;
+          if ((q?.n || 0) <= 1)
+            return err("No puedes eliminar al único administrador. Nombra otro administrador primero.");
+        }
+
+        if (transferir) {
+          if (transferir === id) return err("No puedes transferir el trabajo a la misma cuenta.");
+          const [destino] = await db.sql`SELECT id FROM usuarios WHERE id = ${transferir}`;
+          if (!destino) return err("La cuenta a la que quieres transferir no existe.", 404);
+          await db.sql`UPDATE cotizaciones SET vendedor_id = ${transferir} WHERE vendedor_id = ${id}`;
+          await db.sql`UPDATE clientes     SET creado_por  = ${transferir} WHERE creado_por  = ${id}`;
+        }
+
+        await db.sql`DELETE FROM usuarios WHERE id = ${id}`;
+        return json({ ok: true, mensaje: transferir
+          ? `${u.nombre} fue eliminado y su trabajo quedó a nombre de otra cuenta.`
+          : `${u.nombre} fue eliminado.` });
+      }
     }
 
     /* ============ CLIENTES ============ */

@@ -1263,7 +1263,12 @@ function formUsuario(id = null) {
         <option value="true" ${u.activo ? "selected" : ""}>Activo</option>
         <option value="false" ${u.activo ? "" : "selected"}>Inactivo (sin acceso)</option></select></label>` : ""}
       <button class="btn pri full" type="submit">Guardar</button>
-    </form>`);
+    </form>
+    ${id && id !== S.yo.id ? `<div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--line)">
+      <button class="btn dan full" onclick="eliminarUsuario(${id})">Eliminar vendedor</button>
+      <p style="font-size:11.5px;color:var(--slate);margin-top:8px">
+        Si solo quieres quitarle el acceso sin borrar nada, ponlo como Inactivo arriba.</p>
+    </div>` : ""}`);
   $("#fUsr").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const d = Object.fromEntries(new FormData(ev.target));
@@ -1348,6 +1353,42 @@ async function datosEjemplo(accion) {
   } catch (x) { alert(x.message); }
 }
 
+async function eliminarUsuario(id) {
+  const lista = window._usuarios || [];
+  const u = lista.find((x) => x.id === id);
+  if (!u) return;
+  const otros = lista.filter((x) => x.id !== id && x.activo);
+  const n = u.cotizaciones || 0;
+
+  abrirModal(`Eliminar a ${esc(u.nombre)}`, `
+    <p style="font-size:13.5px;line-height:1.6;margin-bottom:14px">
+      ${n > 0
+        ? `Esta persona tiene <b>${n} ${n === 1 ? "cotización" : "cotizaciones"}</b> a su nombre. Decide qué pasa con ${n === 1 ? "ella" : "ellas"}.`
+        : "No tiene cotizaciones a su nombre. Se puede eliminar sin más."}
+    </p>
+    ${n > 0 ? `<label class="f"><span>Su trabajo pasa a</span>
+      <select id="elTransfer">
+        <option value="">Dejarlo sin vendedor asignado</option>
+        ${otros.map((x) => `<option value="${x.id}">${esc(x.nombre)}</option>`).join("")}
+      </select></label>
+      <p style="font-size:11.5px;color:var(--slate);margin-bottom:16px">
+        Las cotizaciones y clientes no se borran nunca. Si los dejas sin vendedor, solo tú los verás.</p>` : ""}
+    <div class="acciones">
+      <button class="btn dan" onclick="confirmarEliminar(${id})">Sí, eliminar</button>
+      <button class="btn sec" onclick="cerrarModal()">Cancelar</button>
+    </div>`);
+}
+
+async function confirmarEliminar(id) {
+  const t = $("#elTransfer")?.value;
+  try {
+    const r = await api(`usuarios?id=${id}${t ? "&transferir=" + t : ""}`, { method: "DELETE" });
+    cerrarModal();
+    await verUsuarios();
+    alert(r.mensaje || "Vendedor eliminado.");
+  } catch (x) { aviso("#modalError", x.message); }
+}
+
 /* ---------------- modal ---------------- */
 function abrirModal(titulo, html) {
   $("#modalTitulo").textContent = titulo;
@@ -1363,7 +1404,7 @@ Object.assign(window, {
   ir, abrirCotizacion, nuevaCotizacion, agregarPartida, guardarCotizacion,
   borrarCotizacion, imprimirCotizacion, formCliente, formMovimiento,
   formPassword, verCatalogo, formConcepto, verUsuarios, formUsuario, cerrarModal,
-  formRapido, verSeguimiento, datosEjemplo, formCorreo,
+  formRapido, verSeguimiento, datosEjemplo, formCorreo, eliminarUsuario, confirmarEliminar,
 });
 
 /* ---------------- service worker ---------------- */
