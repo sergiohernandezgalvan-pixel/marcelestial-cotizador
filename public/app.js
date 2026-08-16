@@ -1095,7 +1095,10 @@ function verMas() {
       <h3>Mi cuenta</h3>
       <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
         ${esc(S.yo.nombre)} · ${esc(S.yo.correo)}<br>Perfil: ${esDueno() ? "Administrador general" : "Vendedor"}</p>
-      <button class="btn sec sm" onclick="formPassword()">Cambiar contraseña</button>
+      <div class="acciones">
+        <button class="btn sec sm" onclick="formCorreo()">Cambiar correo</button>
+        <button class="btn sec sm" onclick="formPassword()">Cambiar contraseña</button>
+      </div>
     </div>
     ${esDueno() ? `
     <div class="card">
@@ -1138,6 +1141,28 @@ function verMas() {
         Android: menú del navegador → <b>Instalar aplicación</b>.<br>
         iPhone: botón compartir → <b>Agregar a inicio</b>.</p>
     </div>`;
+}
+
+function formCorreo() {
+  abrirModal("Cambiar mi correo", `
+    <p style="font-size:13px;color:var(--slate);margin-bottom:14px">
+      Correo actual: <b style="color:var(--ink)">${esc(S.yo.correo)}</b><br>
+      Con el correo nuevo entrarás la próxima vez. La contraseña no cambia.</p>
+    <form id="fCorreo">
+      <label class="f"><span>Correo nuevo</span><input type="email" name="correo" required></label>
+      <label class="f"><span>Tu contraseña actual</span><input type="password" name="password" required></label>
+      <button class="btn pri full" type="submit">Actualizar correo</button>
+    </form>`);
+  $("#fCorreo").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    try {
+      const r = await api("cambiar-correo", { method: "POST", body: Object.fromEntries(new FormData(ev.target)) });
+      S.yo.correo = r.correo;
+      cerrarModal();
+      verMas();
+      alert("Listo. Tu correo ahora es " + r.correo);
+    } catch (x) { aviso("#modalError", x.message); }
+  });
 }
 
 function formPassword() {
@@ -1229,7 +1254,8 @@ function formUsuario(id = null) {
   abrirModal(id ? "Editar vendedor" : "Nuevo vendedor", `
     <form id="fUsr">
       <label class="f"><span>Nombre *</span><input name="nombre" required value="${esc(u.nombre || "")}"></label>
-      ${id ? "" : '<label class="f"><span>Correo *</span><input name="correo" type="email" required></label>'}
+      <label class="f"><span>Correo *</span>
+        <input name="correo" type="email" ${id ? "" : "required"} value="${esc(u.correo || "")}"></label>
       <label class="f"><span>Teléfono</span><input name="telefono" value="${esc(u.telefono || "")}"></label>
       <label class="f"><span>${id ? "Nueva contraseña (opcional)" : "Contraseña * (mínimo 8)"}</span>
         <input name="password" type="password" ${id ? "" : "required minlength=8"}></label>
@@ -1337,7 +1363,7 @@ Object.assign(window, {
   ir, abrirCotizacion, nuevaCotizacion, agregarPartida, guardarCotizacion,
   borrarCotizacion, imprimirCotizacion, formCliente, formMovimiento,
   formPassword, verCatalogo, formConcepto, verUsuarios, formUsuario, cerrarModal,
-  formRapido, verSeguimiento, datosEjemplo,
+  formRapido, verSeguimiento, datosEjemplo, formCorreo,
 });
 
 /* ---------------- service worker ---------------- */

@@ -62,6 +62,20 @@ export default async (req) => {
       return json({ ok: true });
     }
 
+
+    if (ruta === "cambiar-correo" && metodo === "POST") {
+      const nuevo = limpio(cuerpo.correo, 120)?.toLowerCase();
+      if (!nuevo || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(nuevo))
+        return err("Escribe un correo válido.");
+      const [u] = await db.sql`SELECT password_hash FROM usuarios WHERE id = ${yo.id}`;
+      if (!verifyPassword(cuerpo.password || "", u.password_hash))
+        return err("La contraseña no es correcta.", 403);
+      const ocupado = await db.sql`SELECT id FROM usuarios WHERE correo = ${nuevo} AND id <> ${yo.id}`;
+      if (ocupado.length) return err("Ese correo ya lo usa otra cuenta.", 409);
+      await db.sql`UPDATE usuarios SET correo = ${nuevo} WHERE id = ${yo.id}`;
+      return json({ ok: true, correo: nuevo });
+    }
+
     /* ============ VENDEDORES (solo dueño) ============ */
     if (ruta === "usuarios") {
       if (!esDueno(yo)) return err("Solo el administrador puede gestionar vendedores.", 403);
@@ -94,6 +108,14 @@ export default async (req) => {
         if (cuerpo.password) {
           if (String(cuerpo.password).length < 8) return err("Contraseña demasiado corta.");
           await db.sql`UPDATE usuarios SET password_hash = ${hashPassword(cuerpo.password)} WHERE id = ${id}`;
+        }
+        const correoNuevo = limpio(cuerpo.correo, 120)?.toLowerCase();
+        if (correoNuevo) {
+          if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(correoNuevo))
+            return err("Escribe un correo válido.");
+          const ocupado = await db.sql`SELECT id FROM usuarios WHERE correo = ${correoNuevo} AND id <> ${id}`;
+          if (ocupado.length) return err("Ese correo ya lo usa otra cuenta.", 409);
+          await db.sql`UPDATE usuarios SET correo = ${correoNuevo} WHERE id = ${id}`;
         }
         await db.sql`
           UPDATE usuarios SET
