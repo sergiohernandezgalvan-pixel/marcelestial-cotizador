@@ -1,7 +1,7 @@
 {
-  "name": "Cotizador Mar Celestial",
-  "short_name": "Mar Celestial",
-  "description": "Cotizaciones, clientes e inventario de Comercializadora Mar Celestial",
+  "name": "Cotizador Marcelestial",
+  "short_name": "Marcelestial",
+  "description": "Cotizaciones, clientes e inventario de Comercializadora Marcelestial",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

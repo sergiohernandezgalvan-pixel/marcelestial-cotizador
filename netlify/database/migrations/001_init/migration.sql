@@ -1,4 +1,4 @@
--- Mar Celestial · Cotizador — esquema inicial
+-- Marcelestial · Cotizador — esquema inicial
 
 CREATE TABLE IF NOT EXISTS usuarios (
   id             SERIAL PRIMARY KEY,

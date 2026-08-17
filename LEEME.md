@@ -1,4 +1,4 @@
-# Cotizador Mar Celestial — aplicación web e instalable
+# Cotizador Marcelestial — aplicación web e instalable
 
 Aplicación para generar, guardar y dar seguimiento a cotizaciones, con catálogo de precios
 central, directorio de clientes e inventario de perfiles y herrajes.

@@ -1,4 +1,4 @@
-/* Service worker — Cotizador Mar Celestial
+/* Service worker — Cotizador Marcelestial
    La aplicación (HTML, JS, CSS) SIEMPRE se busca primero en la red, para que cada
    actualización publicada llegue de inmediato. El caché solo sirve de respaldo cuando
    no hay señal. Íconos y manifiesto sí se sirven desde caché. */

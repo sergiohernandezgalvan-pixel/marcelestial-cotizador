@@ -1,5 +1,5 @@
-/* Cotizador Mar Celestial — app cliente */
-const VERSION = "2026.08.16-13";
+/* Cotizador Marcelestial — app cliente */
+const VERSION = "2026.08.17-1";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -472,7 +472,7 @@ async function imprimirCotizacion(conRecibo = false) {
         ${campo("Folio", c.folio)}
         ${campo("Fecha", fecha(c.creado_en))}
         ${campo("Cliente", c.cliente_nombre)}
-        ${campo("Referencia", c.cliente_referencia)}
+        ${campo("No. de servicio (RPU)", c.cliente_referencia)}
         ${campo("Dirección", c.cliente_direccion)}
         ${campo("Atiende", c.vendedor_nombre)}
       </div>
@@ -529,7 +529,7 @@ async function imprimirCotizacion(conRecibo = false) {
       ${c.comentarios ? `<h2>Comentarios</h2><p style="font-size:11.5px;line-height:1.6">${esc(c.comentarios)}</p>` : ""}
 
       <div class="pie">
-        <b>Comercializadora Mar Celestial S.A.S.</b> · Perfiles de aluminio · Sistemas fotovoltaicos · Soluciones eléctricas<br>
+        <b>Comercializadora Marcelestial S.A.S.</b> · Perfiles de aluminio · Sistemas fotovoltaicos · Soluciones eléctricas<br>
         WhatsApp 55 7657 4769 · contacto@marcelestial.net · www.marcelestial.net · CDMX y Estado de México<br><br>
         Los precios son indicativos y están sujetos a revisión técnica en sitio y a confirmación por escrito.
         Vigencia de la oferta: 30 días. Cifras de ahorro estimadas con base en el consumo histórico reportado
@@ -1177,8 +1177,8 @@ function calcRecibo() {
     ${ajustado ? `<div style="font-size:12.5px;background:#E9F1FB;border-radius:10px;padding:11px 13px;margin-bottom:12px">
       El cálculo pedía <b>${n(r.modulosEnteros, 0)}</b> módulos; estás cotizando <b>${n(r.usar, 0)}</b>.
       Este sistema cubre el <b>${n(r.cobertura, 0)}%</b> de su consumo: el cliente seguirá pagando
-      alrededor de <b>${money(Math.max(0, r.consumo * r.precioKwh - r.ahorroMes))}</b> por periodo.
-      Se puede ampliar después.</div>` : ""}
+      alrededor de <b>${money(Math.max(0, r.consumo * r.precioKwh - r.ahorroPeriodo))}</b>
+      de energía por periodo de ${n(r.dias, 0)} días. Se puede ampliar después.</div>` : ""}
     ${precioTocado ? `<div style="font-size:12px;color:var(--warn);margin-bottom:10px">
       La tarifa marca <b>${money(r.precioSugerido)}</b> por panel; estás usando <b>${money(r.precioPanel)}</b>.</div>` : ""}
     ${r.fueraDeEscalon ? `<div style="font-size:12.5px;color:var(--warn);background:#FBF0E2;border-radius:10px;
@@ -1480,7 +1480,7 @@ function formCliente(id = null) {
       ${campo("telefono", "Teléfono", "tel")}
       ${campo("correo", "Correo", "email")}
       ${campo("direccion", "Dirección")}
-      ${campo("referencia", "Referencia (recibo CFE)")}
+      ${campo("referencia", "No. de servicio (RPU)")}
       <label class="f"><span>Notas</span><textarea name="notas">${esc(c.notas || "")}</textarea></label>
       <button class="btn pri full" type="submit">Guardar</button>
     </form>`);
