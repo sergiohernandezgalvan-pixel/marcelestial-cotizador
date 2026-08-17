@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.08.17-1";
+const VERSION = "2026.08.17-2";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -818,13 +818,14 @@ function calcularDimensionamiento(e) {
 
   const consumo = tar.horaria ? (e.base + e.intermedia + e.punta) : e.consumo;
   const dias = e.dias > 0 ? e.dias : 30;
-  /* El ahorro se valúa con el precio de la energía, no con el total del recibo: el total
-     trae IVA, alumbrado público, cargo por demanda y factor de potencia, que los paneles
-     no eliminan. Si el vendedor no capturó el importe de energía, se usa el total. */
-  const baseImporte = e.energia > 0 ? e.energia : e.pago;
-  const usaEnergia = e.energia > 0;
-  const precioKwh = consumo > 0 ? baseImporte / consumo : 0;
-  const precioTotal = consumo > 0 ? e.pago / consumo : 0;
+  /* Precio por kWh = lo que el cliente paga en total a CFE entre los kWh del recibo.
+     Si el resultado se sale del rango normal, casi siempre es un dato mal capturado
+     (el consumo o el total), así que la app lo avisa antes de que llegue al cliente. */
+  const precioKwh = consumo > 0 ? e.pago / consumo : 0;
+  const precioMin = Number(P.precio_kwh_min) || 0;
+  const precioMax = Number(P.precio_kwh_max) || 0;
+  const precioFueraDeRango = consumo > 0 && e.pago > 0 && precioMin > 0 && precioMax > 0
+    && (precioKwh < precioMin || precioKwh > precioMax);
   const consumoDia = consumo / dias;
   const porPanelDia = (panel.kw || 0) * (panel.eficiencia || 0) * (panel.horas_solares || 0);
   const modulos = porPanelDia > 0 ? consumoDia / porPanelDia : 0;
@@ -869,7 +870,7 @@ function calcularDimensionamiento(e) {
   const plazo = Number(P.plazo_meses) || 120;
   const mensualidad = plazo > 0 ? (valor - enganche) / plazo : 0;
 
-  return { tar, panel, consumo, dias, precioKwh, precioTotal, usaEnergia,
+  return { tar, panel, consumo, dias, precioKwh, precioFueraDeRango, precioMin, precioMax,
            consumoDia, porPanelDia, modulos, modulosEnteros,
            usar, precioSugerido, precioPanel, tope, fueraDeEscalon,
            guia, fueraDeGuia, invSugeridos, inversores,
@@ -975,13 +976,8 @@ function pintarRecibo() {
           <input type="number" id="rcPago" value="0" inputmode="decimal"></label>
       </div>
       <p id="rcDiasNota" style="font-size:11.5px;color:var(--slate);margin-top:-4px;margin-bottom:10px"></p>
-      ${esMedia ? `
-        <label class="f"><span>Importe de energía del desglose ($)</span>
-          <input type="number" id="rcEnergia" placeholder="opcional, pero recomendado" inputmode="decimal"></label>
-        <p style="font-size:11.5px;color:var(--slate);margin-top:-4px">
-          Es el renglón <b>Energía</b> del "Desglose del importe a pagar". Sin él, el precio por kWh
-          sale del total del recibo e incluye IVA, alumbrado público y cargos por demanda, que los
-          paneles no eliminan.</p>` : ""}
+      <p style="font-size:11.5px;color:var(--slate);margin-top:-4px">
+        El precio por kWh sale del total del recibo entre los kWh del periodo.</p>
     </div>
 
     <div class="card">
@@ -1031,7 +1027,7 @@ function pintarRecibo() {
   $("#v-editor").hidden = false;
   $("#fab").hidden = true;
   window.scrollTo(0, 0);
-  ["rcBase","rcInter","rcPunta","rcConsumo","rcDias","rcPago","rcModulos","rcInversores","rcPrecio","rcDemanda","rcEnergia","rcServicio"]
+  ["rcBase","rcInter","rcPunta","rcConsumo","rcDias","rcPago","rcModulos","rcInversores","rcPrecio","rcDemanda","rcServicio"]
     .forEach((id) => { const n = $("#" + id); if (n) n.addEventListener("input", () => { recordarRecibo(); calcRecibo(); }); });
   $("#rcFoto")?.addEventListener("change", tomarFoto);
   pintarFoto();
@@ -1081,7 +1077,7 @@ function pintarFoto() {
 }
 
 const CAMPOS_RC = ["rcCliente","rcServicio","rcDias","rcPago","rcDel","rcAl","rcDemanda","rcConsumo",
-                   "rcEnergia","rcBase","rcInter","rcPunta","rcModulos","rcInversores","rcPrecio","rcPanel"];
+                   "rcBase","rcInter","rcPunta","rcModulos","rcInversores","rcPrecio","rcPanel"];
 
 /* Los días salen de las fechas del recibo, pero quedan editables. */
 const soloFecha = (v) => {
@@ -1148,7 +1144,6 @@ function datosRecibo() {
     base: numero($("#rcBase")?.value), intermedia: numero($("#rcInter")?.value),
     punta: numero($("#rcPunta")?.value), consumo: numero($("#rcConsumo")?.value),
     dias: numero($("#rcDias")?.value), pago: numero($("#rcPago")?.value),
-    energia: numero($("#rcEnergia")?.value),
     servicio: ($("#rcServicio")?.value || "").trim(),
     panel: $("#rcPanel")?.value,
     modulosManual: numero($("#rcModulos")?.value),
@@ -1168,6 +1163,11 @@ function calcRecibo() {
 
   $("#rcResultado").innerHTML = `
     <h3>Resultado del dimensionamiento</h3>
+    ${r.precioFueraDeRango ? `<div style="font-size:12.5px;color:var(--bad);background:#FBE4E2;
+      border-radius:10px;padding:11px 13px;margin-bottom:12px">
+      <b>Revisa la captura: el precio sale en $${n(r.precioKwh, 4)} por kWh.</b>
+      Lo normal está entre $${n(r.precioMin, 2)} y $${n(r.precioMax, 2)}. Casi siempre es que el
+      consumo o el total del recibo se capturaron mal, y eso descuadra el proyecto completo.</div>` : ""}
     <div class="grid3" style="margin-bottom:14px">
       <div class="kpi"><b>${n(r.usar, 0)}</b><span>Módulos</span></div>
       <div class="kpi"><b>${n(r.kwp)}</b><span>kWp</span></div>
@@ -1199,10 +1199,7 @@ function calcRecibo() {
     <div class="spec" style="margin-bottom:6px">
       <div><span>Tarifa</span><b>${esc(r.tar.clave || "")} · ${esc(d.tension)} V</b></div>
       <div><span>Consumo total</span><b>${n(r.consumo, 0)} kWh</b></div>
-      <div><span>${r.usaEnergia ? "Precio de la energía" : "Precio promedio del recibo"}</span>
-        <b>$${n(r.precioKwh, 4)} / kWh</b></div>
-      ${r.usaEnergia ? `<div><span>Promedio del recibo completo</span>
-        <b style="font-weight:600;color:var(--slate)">$${n(r.precioTotal, 4)} / kWh</b></div>` : ""}
+      <div><span>Precio promedio</span><b>$${n(r.precioKwh, 4)} / kWh</b></div>
       <div><span>Consumo por día</span><b>${n(r.consumoDia)} kWh</b></div>
       <div><span>Genera un panel al día</span><b>${n(r.porPanelDia, 4)} kWh</b></div>
       <div><span>Producción mensual</span><b>${n(r.produccionMes, 0)} kWh</b></div>
@@ -1272,8 +1269,6 @@ async function guardarRecibo() {
         base: d.base, intermedia: d.intermedia, punta: d.punta,
         consumo_total: Math.round(r.consumo), dias: d.dias, pago: d.pago,
         no_servicio: d.servicio || null,
-        importe_energia: d.energia || null,
-        precio_kwh_base: r.usaEnergia ? "energía" : "total del recibo",
         periodo: periodoTexto(),
         periodo_del: $("#rcDel")?.value || null, periodo_al: $("#rcAl")?.value || null,
         uvie: !!r.tar.uvie, gestion: !!r.tar.gestion,
@@ -1310,8 +1305,12 @@ function formDimensionamiento() {
         ${campo("dias_periodo", "Días del periodo", "1")}
         ${campo("enganche_pct", "Enganche %", "1")}
         ${campo("plazo_meses", "Plazo en meses", "1")}
-
+        ${campo("precio_kwh_min", "Precio kWh mínimo", "0.1")}
+        ${campo("precio_kwh_max", "Precio kWh máximo", "0.1")}
       </div>
+      <p style="font-size:11.5px;color:var(--slate);margin:-4px 0 4px">
+        Si una cotización sale fuera de ese rango, la app avisa que revisen la captura del recibo.
+        Deja los dos en cero para apagar el aviso.</p>
       <div style="font-weight:700;font-size:13px;margin:14px 0 8px">Tipos de panel</div>
       ${paneles.map((x, i) => `
         <div class="grid3" style="gap:8px;margin-bottom:8px">
@@ -1330,6 +1329,7 @@ function formDimensionamiento() {
       precio_por_panel: Number(P.precio_por_panel) || 0,
       m2_por_panel: numero(d.m2_por_panel), dias_periodo: numero(d.dias_periodo),
       enganche_pct: numero(d.enganche_pct), plazo_meses: numero(d.plazo_meses),
+      precio_kwh_min: numero(d.precio_kwh_min), precio_kwh_max: numero(d.precio_kwh_max),
       iva_incluido: P.iva_incluido !== false,
       paneles: paneles.map((_, i) => ({
         clave: d[`p${i}_clave`], kw: numero(d[`p${i}_kw`]),
