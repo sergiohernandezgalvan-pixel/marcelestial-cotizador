@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.08.17-2";
+const VERSION = "2026.08.18-1";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -479,13 +479,12 @@ async function imprimirCotizacion(conRecibo = false) {
 
       <h2>Oferta económica</h2>
       <table>
-        <tr><th>Concepto</th><th class="n">Cant.</th><th class="n">P. unitario</th><th class="n">Importe</th></tr>
+        <tr><th>Concepto</th><th class="n">Cant.</th><th class="n">Importe</th></tr>
         ${partidas.map((p) => `<tr>
           <td>${esc(p.descripcion)}<br><span style="font-size:10px;color:#6b7280">${esc(p.clave)}</span></td>
           <td class="n">${numero(p.cantidad)} ${esc(p.unidad || "")}</td>
-          <td class="n">${money(p.precio)}</td>
           <td class="n">${money(numero(p.cantidad) * numero(p.precio))}</td></tr>`).join("")}
-        <tr class="tot"><td colspan="3">TOTAL MXN NETO</td><td class="n">${money(total)}</td></tr>
+        <tr class="tot"><td colspan="2">TOTAL MXN NETO</td><td class="n">${money(total)}</td></tr>
       </table>
 
       ${Object.keys(t).length ? `<h2>Detalle técnico</h2><div class="campos">
@@ -502,6 +501,7 @@ async function imprimirCotizacion(conRecibo = false) {
         ${campo("Pagará con sistema FV", ah.nuevo || ah.nuevo === 0 ? money(ah.nuevo) : "")}
         ${campo("Ahorro por periodo", ah.actual ? money(numero(ah.actual) - numero(ah.nuevo)) : "")}
         ${campo("Cobertura de su consumo", ah.cobertura ? ah.cobertura + " %" : "")}
+        ${campo("Precio de referencia", ah.precio_kwh ? "$" + ah.precio_kwh + " / kWh" : "")}
         ${campo("Retorno de inversión", ah.roi ? ah.roi + " años" : "")}
         ${campo("Beneficio anual promedio", ah.anual ? money(ah.anual) : "")}
       </div>
@@ -509,7 +509,13 @@ async function imprimirCotizacion(conRecibo = false) {
         <p style="font-size:10.5px;color:#6b7280;margin-top:7px;line-height:1.5">
           El sistema propuesto cubre el ${ah.cobertura}% de su consumo actual. El resto se seguirá
           tomando de la red y ya está considerado en el importe indicado arriba. El sistema es
-          ampliable si más adelante desea cubrir un porcentaje mayor.</p>` : ""}` : ""}
+          ampliable si más adelante desea cubrir un porcentaje mayor.</p>` : ""}
+      ${ah.nuevo === 0 && ah.actual ? `
+        <p style="font-size:10.5px;color:#6b7280;margin-top:7px;line-height:1.5">
+          El sistema cubre la totalidad de su consumo de energía. Aun así, CFE continúa facturando
+          el <b>cargo fijo del servicio</b> y el derecho de alumbrado público${ah.cargo_fijo
+            ? `, del orden de <b>${money(ah.cargo_fijo)}</b> por periodo` : ""}, por lo que su
+          recibo no llega a cero.</p>` : ""}` : ""}
 
       ${conRecibo && c.recibo_foto ? `
         <div class="recibo-doc">
@@ -523,7 +529,7 @@ async function imprimirCotizacion(conRecibo = false) {
         <div><span>Paneles solares</span><b>30 años</b></div>
         <div><span>Inversores</span><b>10 años</b></div>
         <div><span>Instalación y mano de obra</span><b>1 año</b></div>
-        <div><span>Interconexión CFE</span><b>5 a 45 días hábiles</b></div>
+        <div><span>Interconexión CFE</span><b>5 a 90 días hábiles</b></div>
       </div>
 
       ${c.comentarios ? `<h2>Comentarios</h2><p style="font-size:11.5px;line-height:1.6">${esc(c.comentarios)}</p>` : ""}
@@ -616,6 +622,16 @@ function rapidaFV() {
         <select id="rpMarca">${marcas.map((m) => `<option>${m}</option>`).join("")}<option>Otra</option></select></label>
     </div>
 
+    <div class="card">
+      <h3>Precio de la energía</h3>
+      <label class="f destaca"><span>Precio por kWh que paga el cliente ($)</span>
+        <input type="number" step="0.01" id="rpPrecioKwh" inputmode="decimal"
+               value="${Number(P.precio_kwh_default) || 3.5}"></label>
+      <p style="font-size:11.5px;color:var(--slate)">
+        De este dato depende todo el retorno de inversión. Si el cliente trae su recibo,
+        conviene cotizar desde el recibo para sacarlo exacto.</p>
+    </div>
+
     <div class="card" id="rpResultado"></div>
 
     <div class="acciones" style="margin-bottom:30px">
@@ -626,7 +642,7 @@ function rapidaFV() {
   $("#v-editor").hidden = false;
   $("#fab").hidden = true;
   window.scrollTo(0, 0);
-  ["rpPaneles", "rpW", "rpInv"].forEach((id) => $("#" + id).addEventListener("input", calcFV));
+  ["rpPaneles", "rpW", "rpInv", "rpPrecioKwh"].forEach((id) => $("#" + id).addEventListener("input", calcFV));
   calcFV();
 
   if (!Number(P.panel_precio)) {
@@ -657,7 +673,13 @@ function calcFV() {
   const P = paramFV();
   const { lista, kwp, inv, paneles } = partidasFV();
   const total = lista.reduce((a, x) => a + x.cantidad * x.precio, 0);
-  const prod = kwp * (Number(P.produccion_kwh_kwp_bim) || 150);
+  const prod = kwp * (Number(P.produccion_kwh_kwp_bim) || 150);   // kWh bimestrales
+  /* Sin recibo no hay de dónde sacar el precio por kWh, así que el vendedor lo captura.
+     Con él ya se puede mostrar el retorno, que es el número que cierra la venta. */
+  const precioKwh = numero($("#rpPrecioKwh")?.value);
+  const ahorroMes = (prod / 2) * precioKwh;
+  const ahorroAnual = ahorroMes * 12;
+  const roi = ahorroAnual > 0 ? total / ahorroAnual : 0;
   $("#rpResultado").innerHTML = `
     <h3>Resultado</h3>
     <div class="grid3" style="margin-bottom:12px">
@@ -668,7 +690,37 @@ function calcFV() {
     ${lista.map((x) => `<div class="row between" style="padding:6px 0;border-bottom:1px dashed var(--line);font-size:13px">
       <span style="color:var(--slate)">${esc(x.descripcion)} <b style="color:var(--ink)">× ${x.cantidad % 1 ? x.cantidad.toFixed(2) : x.cantidad}</b></span>
       <b>${money(x.cantidad * x.precio)}</b></div>`).join("")}
-    <div class="total-row"><span>Total</span><b>${money(total)}</b></div>`;
+    <div class="total-row"><span>Total</span><b>${money(total)}</b></div>
+    ${precioKwh > 0 ? `
+      <div class="grid3" style="margin-top:14px">
+        <div class="kpi"><b>${money(ahorroMes)}</b><span>Ahorro mensual</span></div>
+        <div class="kpi"><b>${money(ahorroAnual)}</b><span>Ahorro anual</span></div>
+        <div class="kpi"><b>${roi.toFixed(1)}</b><span>Años de retorno</span></div>
+      </div>
+      <p style="font-size:11.5px;color:var(--slate);margin-top:10px">
+        Calculado a ${money(precioKwh)} por kWh. Supone que el cliente consume al menos lo que
+        genera el sistema; si genera de más, el excedente no se ahorra igual.</p>` : `
+      <p style="font-size:12px;color:var(--warn);margin-top:12px">
+        Captura el precio por kWh para poder mostrar el retorno de inversión.</p>`}`;
+}
+
+/* Ahorro y retorno de la cotización por panel, con el precio por kWh que capturó el
+   vendedor. Si lo dejó vacío, no se inventa nada: la cotización va sin análisis. */
+function ahorroRapida() {
+  const P = paramFV();
+  const { kwp } = partidasFV();
+  const precioKwh = numero($("#rpPrecioKwh")?.value);
+  if (precioKwh <= 0) return {};
+  const total = partidasFV().lista.reduce((a, x) => a + x.cantidad * x.precio, 0);
+  const ahorroMes = (kwp * (Number(P.produccion_kwh_kwp_bim) || 150) / 2) * precioKwh;
+  const anual = ahorroMes * 12;
+  /* Aquí NO se sabe cuánto paga hoy el cliente (no hay recibo), así que no se llenan
+     "pago actual" ni "pagará con el sistema": sólo el beneficio y el retorno. */
+  return {
+    precio_kwh: Number(precioKwh.toFixed(4)),
+    roi: Number((anual > 0 ? total / anual : 0).toFixed(1)),
+    anual: Math.round(anual),
+  };
 }
 
 async function guardarRapida() {
@@ -687,6 +739,7 @@ async function guardarRapida() {
         marcainversor: $("#rpMarca").value,
         produccion: String(Math.round(kwp * (Number(P.produccion_kwh_kwp_bim) || 150))),
       },
+      ahorro: ahorroRapida(),
       comentarios: "Estimación rápida. Sujeta a levantamiento técnico en sitio.",
     }});
     S.editor = { id: cotizacion.id, folio: cotizacion.folio };
@@ -1179,6 +1232,12 @@ function calcRecibo() {
       Este sistema cubre el <b>${n(r.cobertura, 0)}%</b> de su consumo: el cliente seguirá pagando
       alrededor de <b>${money(Math.max(0, r.consumo * r.precioKwh - r.ahorroPeriodo))}</b>
       de energía por periodo de ${n(r.dias, 0)} días. Se puede ampliar después.</div>` : ""}
+    ${!ajustado && r.cobertura >= 100 && r.consumo > 0 ? `
+      <div style="font-size:12.5px;background:#E9F1FB;border-radius:10px;padding:11px 13px;margin-bottom:12px">
+        Este sistema cubre <b>todo</b> su consumo de energía, así que la propuesta dirá que pagará
+        <b>$0.00</b>. Recuérdale al cliente que CFE le seguirá cobrando el cargo fijo${
+          Number(r.tar.cargo_fijo) ? ` — del orden de <b>${money(r.tar.cargo_fijo)}</b> por periodo` : ""
+        } y el alumbrado público. La cotización ya lo trae escrito.</div>` : ""}
     ${precioTocado ? `<div style="font-size:12px;color:var(--warn);margin-bottom:10px">
       La tarifa marca <b>${money(r.precioSugerido)}</b> por panel; estás usando <b>${money(r.precioPanel)}</b>.</div>` : ""}
     ${r.fueraDeEscalon ? `<div style="font-size:12.5px;color:var(--warn);background:#FBF0E2;border-radius:10px;
@@ -1260,6 +1319,7 @@ async function guardarRecibo() {
         actual: Math.round(d.pago),
         nuevo: Math.max(0, Math.round(d.pago - r.ahorroPeriodo)),
         cobertura: Math.round(r.cobertura),
+        cargo_fijo: Number(r.tar.cargo_fijo) || 0,
         roi: Number(r.roi.toFixed(1)), anual: Math.round(r.ahorroAnual),
       },
       recibo: {
@@ -1365,6 +1425,10 @@ function formTarifas() {
             <label style="font-size:12px;display:flex;align-items:center;gap:6px">
               <input type="checkbox" name="t${i}_horaria" ${t.horaria ? "checked" : ""} style="width:auto"> Horaria</label>
           </div>
+          <label class="f"><span>Cargo fijo de CFE por periodo ($)</span>
+            <input name="t${i}_cargo" type="number" step="0.01" value="${Number(t.cargo_fijo) || 0}">
+            <small style="font-size:11px;color:var(--slate)">Lo que CFE sigue cobrando aunque el
+              sistema cubra todo el consumo. Se imprime en la cotización.</small></label>
           ${(t.escalones || []).map((e, j) => `
             <div class="grid3" style="gap:8px;margin-bottom:6px">
               <label class="f" style="margin:0"><span>Tensión</span>
@@ -1383,6 +1447,7 @@ function formTarifas() {
     const valor = { ...T, lista: lista.map((t, i) => ({
       ...t,
       uvie: !!d[`t${i}_uvie`], gestion: !!d[`t${i}_gestion`], horaria: !!d[`t${i}_horaria`],
+      cargo_fijo: numero(d[`t${i}_cargo`]),
       escalones: (t.escalones || []).map((e, j) => ({
         tension: d[`t${i}e${j}_tension`],
         hasta: numero(d[`t${i}e${j}_hasta`]),
@@ -1781,6 +1846,8 @@ function formRapido() {
       ${campo("manobra_por_kwp", "Mano de obra por kWp", "")}
       ${campo("paneles_por_inversor", "Paneles por inversor", "Para sugerir cuántos inversores lleva")}
       ${campo("produccion_kwh_kwp_bim", "kWh bimestrales por kWp", "Factor de producción de la zona")}
+      ${campo("precio_kwh_default", "Precio por kWh de arranque",
+        "Lo que se propone cuando no hay recibo a la mano. El vendedor lo puede cambiar en cada cotización.")}
       <button class="btn pri full" type="submit">Guardar precios</button>
     </form>`);
   $("#fRap").addEventListener("submit", async (ev) => {

@@ -6,8 +6,25 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
+# La aplicación nunca se guarda en el caché del navegador: cada actualización que se
+# publica tiene que llegar al teléfono del vendedor. Los íconos sí se cachean.
 [[headers]]
   for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/app.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/styles.css"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/index.html"
   [headers.values]
     Cache-Control = "no-cache"
 
