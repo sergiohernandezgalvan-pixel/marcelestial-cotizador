@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.08.18-1";
+const VERSION = "2026.08.18-2";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -541,8 +541,77 @@ async function imprimirCotizacion(conRecibo = false) {
         Vigencia de la oferta: 30 días. Cifras de ahorro estimadas con base en el consumo histórico reportado
         y en las tarifas vigentes de CFE.
       </div>
-    </div>`;
+    </div>
+    ${tablaRecuperacion(c, total)}`;
   setTimeout(() => window.print(), 120);
+}
+
+const MESES_CORTO = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+
+/* Segunda hoja de la propuesta: mes a mes, cuánto del proyecto lleva recuperado el
+   cliente con su propio ahorro, hasta que el saldo llega a cero. */
+function tablaRecuperacion(c, inversion) {
+  const ah = c.ahorro || {}, t = c.tecnico || {};
+  const mensual = numero(ah.anual) / 12;
+  if (!(inversion > 0) || !(mensual > 0)) return "";
+
+  const kwhMes = Math.round(numero(t.produccion) / 2);   // "produccion" se guarda bimestral
+  const inicio = c.creado_en ? new Date(c.creado_en) : new Date();
+  const TOPE = 120;                                       // 10 años, por si el ahorro es mínimo
+  const filas = [];
+  let saldo = inversion;
+  for (let i = 0; i < TOPE && saldo > 0.005; i++) {
+    const aplica = Math.min(mensual, saldo);              // el último mes sólo abona lo que falta
+    const mes = (inicio.getMonth() + i) % 12;
+    const anio = inicio.getFullYear() + Math.floor((inicio.getMonth() + i) / 12);
+    saldo -= aplica;
+    filas.push({ n: i + 1, etq: `${MESES_CORTO[mes]}-${String(anio).slice(2)}`,
+                 aplica, saldo: saldo < 0.005 ? 0 : saldo, cierraAnio: (i + 1) % 12 === 0 });
+  }
+  if (!filas.length) return "";
+  const ultima = filas[filas.length - 1];
+  const anios = (filas.length / 12).toFixed(1);
+
+  return `
+    <div class="hoja recuperacion">
+      <div class="dh">
+        <div><h1>Recuperación de la inversión</h1>
+          <div style="font-size:11.5px;color:#6b7280;margin-top:4px">
+            Folio ${esc(c.folio || "")} · ${esc(c.cliente_nombre || "")}</div></div>
+        <img src="/icons/logo.png" alt="">
+      </div>
+
+      <div class="campos" style="margin-bottom:12px">
+        <div><span>Inversión</span><b>${money(inversion)}</b></div>
+        <div><span>Ahorro mensual estimado</span><b>${money(mensual)}</b></div>
+        ${kwhMes > 0 ? `<div><span>Energía generada al mes</span><b>${kwhMes.toLocaleString("es-MX")} kWh</b></div>` : ""}
+        <div><span>Inversión recuperada en</span><b>${filas.length} meses · ${anios} años</b></div>
+      </div>
+
+      <table class="rec">
+        <tr><th class="n">Mes</th><th>Periodo</th>${kwhMes > 0 ? "<th class='n'>Energía generada</th>" : ""}
+          <th class="n">Ahorro del mes</th><th class="n">Ahorro del año</th>
+          <th class="n">Falta por recuperar</th></tr>
+        ${filas.map((f) => `<tr${f.cierraAnio ? ' class="anio"' : ""}>
+          <td class="n">${f.n}</td><td>${f.etq}</td>
+          ${kwhMes > 0 ? `<td class="n">${kwhMes.toLocaleString("es-MX")} kWh</td>` : ""}
+          <td class="n">${money(f.aplica)}</td>
+          <td class="n">${f.cierraAnio ? money(mensual * 12) : ""}</td>
+          <td class="n">${money(f.saldo)}</td></tr>`).join("")}
+      </table>
+
+      <p style="font-size:10.5px;color:#6b7280;margin-top:10px;line-height:1.5">
+        A partir de <b>${esc(ultima.etq)}</b> el sistema ya se pagó solo y todo lo que genera es
+        ahorro neto, durante el resto de su vida útil. El cálculo supone un ahorro constante:
+        no considera la degradación natural de los paneles ni los aumentos de tarifa de CFE,
+        que en la práctica se compensan entre sí. Los periodos son estimados y se recorren
+        según la fecha real de interconexión.</p>
+
+      <div class="pie">
+        <b>Comercializadora Marcelestial S.A.S.</b> · Perfiles de aluminio · Sistemas fotovoltaicos · Soluciones eléctricas<br>
+        WhatsApp 55 7657 4769 · contacto@marcelestial.net · www.marcelestial.net · CDMX y Estado de México
+      </div>
+    </div>`;
 }
 
 
