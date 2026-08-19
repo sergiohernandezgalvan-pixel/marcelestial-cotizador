@@ -431,6 +431,14 @@ export default async (req) => {
         ids.push(c.id);
       }
 
+      /* Los ejemplos por tarifa se asignan a Sergio Hernández si existe ese
+         usuario; si no, se quedan con quien cargó los datos de ejemplo. */
+      const [sergio] = await db.sql`
+        SELECT id FROM usuarios
+         WHERE activo AND nombre ILIKE ${"%sergio%"} AND nombre ILIKE ${"%hern%"}
+         ORDER BY id LIMIT 1`;
+      const idSergio = sergio?.id || yo.id;
+
       const anio = new Date().getFullYear();
       let consecutivo = await ultimoFolio(anio);
       const folio = () => `MC-${anio}-${String(++consecutivo).padStart(4, "0")}`;
@@ -481,6 +489,42 @@ export default async (req) => {
           partidas: [
             { clave: "002",     descripcion: "RIEL CORTO MINI · AL6005-T5 anodizado · 190 mm", unidad: "PZA", cantidad: 600, precio: 110 },
             { clave: "ABZ-FIN", descripcion: "Abrazadera final ajustable 30/35/40 mm",         unidad: "PZA", cantidad: 240, precio: 46 }] },
+
+        /* ---- Ejemplos hechos desde el recibo de CFE, uno por tarifa ----
+           Sirven para revisar cómo queda la propuesta con las últimas
+           actualizaciones: cobertura, nota del cargo fijo, guía de inversores
+           y la hoja de recuperación mes a mes. Van a nombre de Sergio. */
+        /* GDMTH · media tensión horaria · sistema parcial (300 de 891 módulos) */
+        { cli: 1, linea: "fotovoltaico", tipo: "rapida", estatus: "negociacion", sergio: true,
+          partidas: [{"clave":"SISTEMA-FV","descripcion":"Sistema fotovoltaico interconectado · 300 módulos de 710 W · 213.00 kWp · tarifa GDMTH en 220 V","unidad":"MOD","cantidad":300,"precio":11500}],
+          tecnico: {"kwp":"213.00","paneles":"300","wpanel":"710","inversores":"2","tension":"220","capinversor":"2 x 100 kW","marcainversor":"Growatt MAX 100K","produccion":"57254"},
+          ahorro: {"actual":263500,"nuevo":174756,"cobertura":34,"cargo_fijo":650,"roi":3.2,"anual":1064932,"precio_kwh":3.1},
+          recibo: {"tarifa":"GDMTH","tarifa_nombre":"GDMTH · Gran demanda en media tensión horaria","grupo":"media","tension":"220","hilos":3,"demanda_contratada":"180","base":30000,"intermedia":45000,"punta":10000,"consumo_total":85000,"dias":30,"pago":263500,"no_servicio":"147911202086","periodo":"1 jun 2026 al 1 jul 2026","periodo_del":"2026-06-01","periodo_al":"2026-07-01","uvie":true,"gestion":true,"inversores":2,"inversor_modelo":"MAX 100K","inversor_capacidad":"2 x 100 kW","inversor_aplicacion":"Industrial","inversor_cobrado":false,"revision_ingenieria":false,"precio_kwh":3.1,"consumo_dia":2833,"superficie_m2":930,"produccion_mes":28627,"ahorro_mes":88744,"ahorro_30":31947955,"enganche":1035000,"mensualidad":20125,"plazo":120},
+          comentarios: "El techo y el presupuesto sólo permiten 300 de los módulos que pide el cálculo. Sistema ampliable. Cotización preliminar. No tendrá validez definitiva hasta la visita técnica del área de ingeniería, en la que se inspeccionará el sitio, se tomarán medidas y se analizarán las condiciones de instalación. Con base en esa evaluación se determinará la cantidad final de paneles que pueden instalarse de forma segura y eficiente, por lo que el alcance y el importe podrán ajustarse." },
+
+        /* GDMTO · media tensión ordinaria */
+        { cli: 2, linea: "fotovoltaico", tipo: "rapida", estatus: "enviada", sergio: true,
+          partidas: [{"clave":"SISTEMA-FV","descripcion":"Sistema fotovoltaico interconectado · 189 módulos de 710 W · 134.19 kWp · tarifa GDMTO en 440 V","unidad":"MOD","cantidad":189,"precio":11000}],
+          tecnico: {"kwp":"134.19","paneles":"189","wpanel":"710","inversores":"1","tension":"440","capinversor":"125 kW","marcainversor":"Growatt MAX 125K","produccion":"36070"},
+          ahorro: {"actual":63000,"nuevo":0,"cobertura":100,"cargo_fijo":650,"roi":2.8,"anual":731613,"precio_kwh":3.3871},
+          recibo: {"tarifa":"GDMTO","tarifa_nombre":"GDMTO · Gran demanda en media tensión ordinaria","grupo":"media","tension":"440","hilos":3,"demanda_contratada":"95","base":0,"intermedia":0,"punta":0,"consumo_total":18600,"dias":31,"pago":63000,"no_servicio":"513250503544","periodo":"5 jun 2026 al 6 jul 2026","periodo_del":"2026-06-05","periodo_al":"2026-07-06","uvie":true,"gestion":true,"inversores":1,"inversor_modelo":"MAX 125K","inversor_capacidad":"125 kW","inversor_aplicacion":"Industrial","inversor_cobrado":false,"revision_ingenieria":false,"precio_kwh":3.3871,"consumo_dia":600,"superficie_m2":586,"produccion_mes":18035,"ahorro_mes":60968,"ahorro_30":21948387,"enganche":623700,"mensualidad":12128,"plazo":120},
+          comentarios: "Cotización preliminar. No tendrá validez definitiva hasta la visita técnica del área de ingeniería, en la que se inspeccionará el sitio, se tomarán medidas y se analizarán las condiciones de instalación. Con base en esa evaluación se determinará la cantidad final de paneles que pueden instalarse de forma segura y eficiente, por lo que el alcance y el importe podrán ajustarse." },
+
+        /* Tarifa 01 · casa */
+        { cli: 5, linea: "fotovoltaico", tipo: "rapida", estatus: "borrador", sergio: true,
+          partidas: [{"clave":"SISTEMA-FV","descripcion":"Sistema fotovoltaico interconectado · 10 módulos de 710 W · 7.10 kWp · tarifa 01 en 127 V · Incluye estructura ligera de piso de aluminio anodizado y gestión ante CFE","unidad":"MOD","cantidad":10,"precio":13000}],
+          tecnico: {"kwp":"7.10","paneles":"10","wpanel":"710","inversores":"1","tension":"127","capinversor":"6 kW","marcainversor":"Growatt MIN","produccion":"1908"},
+          ahorro: {"actual":6300,"nuevo":0,"cobertura":100,"cargo_fijo":60,"roi":3.5,"anual":37180,"precio_kwh":3.5},
+          recibo: {"tarifa":"01","tarifa_nombre":"Tarifa 01 · Casa","grupo":"domestica","tension":"127","hilos":1,"demanda_contratada":null,"base":0,"intermedia":0,"punta":0,"consumo_total":1800,"dias":61,"pago":6300,"no_servicio":"D741860","periodo":"28 may 2026 al 28 jul 2026","periodo_del":"2026-05-28","periodo_al":"2026-07-28","uvie":false,"gestion":true,"inversores":1,"inversor_modelo":"MIN","inversor_capacidad":"6 kW","inversor_aplicacion":"Residencial","inversor_cobrado":false,"revision_ingenieria":false,"precio_kwh":3.5,"consumo_dia":30,"superficie_m2":31,"produccion_mes":954,"ahorro_mes":3098,"ahorro_30":1115410,"enganche":39000,"mensualidad":758,"plazo":120},
+          comentarios: "Cotización preliminar. No tendrá validez definitiva hasta la visita técnica del área de ingeniería, en la que se inspeccionará el sitio, se tomarán medidas y se analizarán las condiciones de instalación. Con base en esa evaluación se determinará la cantidad final de paneles que pueden instalarse de forma segura y eficiente, por lo que el alcance y el importe podrán ajustarse." },
+
+        /* Tarifa 02 · negocio */
+        { cli: 4, linea: "fotovoltaico", tipo: "rapida", estatus: "enviada", sergio: true,
+          partidas: [{"clave":"SISTEMA-FV","descripcion":"Sistema fotovoltaico interconectado · 24 módulos de 710 W · 17.04 kWp · tarifa 02 en 127 V · Incluye estructura ligera de piso de aluminio anodizado y gestión ante CFE","unidad":"MOD","cantidad":24,"precio":13000}],
+          tecnico: {"kwp":"17.04","paneles":"24","wpanel":"710","inversores":"1","tension":"127","capinversor":"15 kW","marcainversor":"Growatt MID","produccion":"4580"},
+          ahorro: {"actual":19119,"nuevo":0,"cobertura":100,"cargo_fijo":250,"roi":2.1,"anual":146443,"precio_kwh":5.3465},
+          recibo: {"tarifa":"02","tarifa_nombre":"Tarifa 02 · Negocio","grupo":"domestica","tension":"127","hilos":1,"demanda_contratada":null,"base":0,"intermedia":0,"punta":0,"consumo_total":3576,"dias":47,"pago":19119,"no_servicio":"228140100722","periodo":"20 jun 2026 al 6 ago 2026","periodo_del":"2026-06-20","periodo_al":"2026-08-06","uvie":false,"gestion":true,"inversores":1,"inversor_modelo":"MID","inversor_capacidad":"15 kW","inversor_aplicacion":"Trifásico","inversor_cobrado":false,"revision_ingenieria":false,"precio_kwh":5.3465,"consumo_dia":76,"superficie_m2":74,"produccion_mes":2290,"ahorro_mes":12204,"ahorro_30":4393302,"enganche":93600,"mensualidad":1820,"plazo":120},
+          comentarios: "Cotización preliminar. No tendrá validez definitiva hasta la visita técnica del área de ingeniería, en la que se inspeccionará el sitio, se tomarán medidas y se analizarán las condiciones de instalación. Con base en esa evaluación se determinará la cantidad final de paneles que pueden instalarse de forma segura y eficiente, por lo que el alcance y el importe podrán ajustarse." }
       ];
 
       const creadas = [];
@@ -488,12 +532,15 @@ export default async (req) => {
         const total = c.partidas.reduce((a, p) => a + p.cantidad * p.precio, 0);
         const [nueva] = await db.sql`
           INSERT INTO cotizaciones (folio, cliente_id, vendedor_id, estatus, linea, tipo,
-                                    tecnico, partidas, ahorro, comentarios, total, demo)
-          VALUES (${folio()}, ${ids[c.cli]}, ${yo.id}, ${c.estatus}, ${c.linea}, ${c.tipo},
+                                    tecnico, partidas, ahorro, recibo, comentarios, total, demo)
+          VALUES (${folio()}, ${ids[c.cli]}, ${c.sergio ? idSergio : yo.id},
+                  ${c.estatus}, ${c.linea}, ${c.tipo},
                   ${JSON.stringify(c.tecnico || {})}::jsonb,
                   ${JSON.stringify(c.partidas)}::jsonb,
                   ${JSON.stringify(c.ahorro || {})}::jsonb,
-                  'Cotización de ejemplo para demostración.', ${total}, TRUE)
+                  ${JSON.stringify(c.recibo || {})}::jsonb,
+                  ${c.comentarios || "Cotización de ejemplo para demostración."},
+                  ${total}, TRUE)
           RETURNING id`;
         creadas.push(nueva.id);
       }

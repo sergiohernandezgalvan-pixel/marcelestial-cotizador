@@ -149,6 +149,7 @@ textarea{min-height:84px;resize:vertical}
   .app,nav.tabs,.fab,header.top,.modal{display:none !important}
   #doc{display:block !important}
   @page{size:letter;margin:14mm}
+
 }
 #doc .hoja{max-width:7in;margin:0 auto;color:#1f2a25;font-size:12px}
 #doc .dh{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #0a3b7d;padding-bottom:10px;margin-bottom:16px}
@@ -190,3 +191,26 @@ label.f.destaca>span{color:var(--blue);font-weight:800}
 #doc table.rec td{padding:4px 7px;border-bottom:1px solid #eef2f7}
 #doc table.rec tr.anio td{background:#e9f1fb;font-weight:700}
 #doc table.rec tr:last-child td{border-bottom:2px solid #0a3b7d;font-weight:700}
+
+/* ---------- ajustes que sólo aplican al imprimir ----------
+   Van al final del archivo para que ganen sobre las reglas de arriba. */
+@media print{
+  /* La propuesta debe caber en una hoja: al imprimir se aprieta un poco el
+     interlineado para que el pie no se brinque solo a la página siguiente. */
+  #doc .hoja{font-size:11px}
+  #doc .dh{padding-bottom:8px;margin-bottom:12px}
+  #doc .dh img{height:56px}
+  #doc h1{font-size:19px}
+  #doc h2{font-size:13px;margin:9px 0 4px}
+  #doc th,#doc td{padding:5px 8px}
+  #doc .campos{gap:2px 18px}
+  #doc .campos div{padding:2px 0}
+  #doc .pie{margin-top:12px;padding-top:7px;font-size:9px;line-height:1.45}
+  /* La hoja de recuperación puede llevar 40 renglones: se aprieta para que la
+     tabla completa quepa en una sola página. */
+  #doc table.rec{font-size:9.5px}
+  #doc table.rec th{padding:4px 6px;font-size:8.5px}
+  #doc table.rec td{padding:1px 6px;line-height:1.1}
+  #doc .hoja.recuperacion p{font-size:8.5px;line-height:1.4}
+  #doc table,#doc .campos{page-break-inside:avoid}
+}

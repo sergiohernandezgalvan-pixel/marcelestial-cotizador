@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.08.19-2";
+const VERSION = "2026.08.19-3";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
