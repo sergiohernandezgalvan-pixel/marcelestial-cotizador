@@ -89,11 +89,42 @@ export const num = (v) => {
 export const limpio = (v, max = 500) =>
   v === null || v === undefined ? null : String(v).trim().slice(0, max) || null;
 
+/* Último número de folio usado en el año.
+   Se toma el MAYOR número ya usado, nunca la cantidad de cotizaciones: si se
+   borra una cotización la cuenta baja y el folio se repetiría. Como el folio es
+   único en la base de datos, eso era el error "duplicate key ... folio". */
+export async function ultimoFolio(anio) {
+  const [r] = await db.sql`
+    SELECT COALESCE(MAX(NULLIF(regexp_replace(substring(folio from 9), '[^0-9]', '', 'g'), '')::int), 0) AS n
+      FROM cotizaciones
+     WHERE folio LIKE ${"MC-" + anio + "-%"}`;
+  return Number(r?.n || 0);
+}
+
 export async function siguienteFolio() {
   const anio = new Date().getFullYear();
-  const [r] = await db.sql`
-    SELECT COUNT(*)::int AS n FROM cotizaciones WHERE folio LIKE ${"MC-" + anio + "-%"}`;
-  return `MC-${anio}-${String((r?.n || 0) + 1).padStart(4, "0")}`;
+  return `MC-${anio}-${String((await ultimoFolio(anio)) + 1).padStart(4, "0")}`;
+}
+
+/* Un folio repetido todavía puede colarse si dos vendedores guardan en el mismo
+   instante. En ese caso se vuelve a intentar con el siguiente número. */
+export const esFolioRepetido = (e) =>
+  /duplicate key|23505|cotizaciones_folio/i.test(
+    [e?.message, e?.detail, e?.constraint,
+     e?.cause?.message, e?.cause?.detail, e?.cause?.constraint].filter(Boolean).join(" ")
+  );
+
+export async function conFolio(intentar, intentos = 8) {
+  let ultimo = null;
+  for (let i = 0; i < intentos; i++) {
+    try {
+      return await intentar(await siguienteFolio());
+    } catch (e) {
+      if (!esFolioRepetido(e)) throw e;
+      ultimo = e;
+    }
+  }
+  throw ultimo;
 }
 
 export function totalDePartidas(partidas) {

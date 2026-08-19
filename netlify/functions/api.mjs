@@ -1,6 +1,7 @@
 import {
   db, json, err, hashPassword, verifyPassword, signToken,
-  sesion, esDueno, num, limpio, siguienteFolio, totalDePartidas, fotoValida,
+  sesion, esDueno, num, limpio, siguienteFolio, ultimoFolio, conFolio,
+  totalDePartidas, fotoValida,
 } from "../lib/core.mjs";
 
 export const config = { path: "/api/*" };
@@ -332,18 +333,21 @@ export default async (req) => {
       }
       if (metodo === "POST") {
         const partidas = Array.isArray(cuerpo.partidas) ? cuerpo.partidas : [];
-        const [c] = await db.sql`
-          INSERT INTO cotizaciones (folio, cliente_id, vendedor_id, estatus, linea, tipo, tecnico, partidas, ahorro, recibo, recibo_foto, comentarios, total)
-          VALUES (${await siguienteFolio()}, ${num(cuerpo.cliente_id) || null}, ${yo.id},
-                  ${limpio(cuerpo.estatus, 20) || "borrador"},
-                  ${limpio(cuerpo.linea, 20) || "fotovoltaico"}, ${limpio(cuerpo.tipo, 10) || "formal"},
-                  ${JSON.stringify(cuerpo.tecnico || {})}::jsonb,
-                  ${JSON.stringify(partidas)}::jsonb,
-                  ${JSON.stringify(cuerpo.ahorro || {})}::jsonb,
-                  ${JSON.stringify(cuerpo.recibo || {})}::jsonb,
-                  ${fotoValida(cuerpo.recibo_foto)},
-                  ${limpio(cuerpo.comentarios, 2000)}, ${totalDePartidas(partidas)})
-          RETURNING *`;
+        const c = await conFolio(async (folio) => {
+          const [fila] = await db.sql`
+            INSERT INTO cotizaciones (folio, cliente_id, vendedor_id, estatus, linea, tipo, tecnico, partidas, ahorro, recibo, recibo_foto, comentarios, total)
+            VALUES (${folio}, ${num(cuerpo.cliente_id) || null}, ${yo.id},
+                    ${limpio(cuerpo.estatus, 20) || "borrador"},
+                    ${limpio(cuerpo.linea, 20) || "fotovoltaico"}, ${limpio(cuerpo.tipo, 10) || "formal"},
+                    ${JSON.stringify(cuerpo.tecnico || {})}::jsonb,
+                    ${JSON.stringify(partidas)}::jsonb,
+                    ${JSON.stringify(cuerpo.ahorro || {})}::jsonb,
+                    ${JSON.stringify(cuerpo.recibo || {})}::jsonb,
+                    ${fotoValida(cuerpo.recibo_foto)},
+                    ${limpio(cuerpo.comentarios, 2000)}, ${totalDePartidas(partidas)})
+            RETURNING *`;
+          return fila;
+        });
         return json({ cotizacion: c }, 201);
       }
       if (metodo === "PATCH") {
@@ -428,8 +432,7 @@ export default async (req) => {
       }
 
       const anio = new Date().getFullYear();
-      const [r] = await db.sql`SELECT COUNT(*)::int AS n FROM cotizaciones`;
-      let consecutivo = (r?.n || 0);
+      let consecutivo = await ultimoFolio(anio);
       const folio = () => `MC-${anio}-${String(++consecutivo).padStart(4, "0")}`;
 
       const COTS = [
@@ -557,7 +560,10 @@ export default async (req) => {
 
     return err("Ruta no encontrada.", 404);
   } catch (e) {
-    console.error("API error:", e);
-    return err("Error del servidor: " + (e?.message || "desconocido"), 500);
+    console.error("API error:", e, e?.cause || "");
+    /* La librería de base de datos envuelve el error real y pone toda la
+       consulta en el mensaje. Al vendedor se le muestra sólo la causa, corta. */
+    const causa = e?.cause?.message || e?.message || "desconocido";
+    return err("Error del servidor: " + String(causa).split("\n")[0].slice(0, 240), 500);
   }
 };

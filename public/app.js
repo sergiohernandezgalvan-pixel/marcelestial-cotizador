@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.08.18-2";
+const VERSION = "2026.08.19-2";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -368,7 +368,7 @@ function pintarPartidas() {
   else {
     cont.innerHTML = p.map((x, i) => `
       <div class="partida">
-        <div class="d"><b>${esc(x.descripcion)}</b><span>${esc(x.clave)} · ${esc(x.unidad || "PZA")} · ${money(x.precio)}</span></div>
+        <div class="d"><b>${esc(x.descripcion)}</b><span>${esc(x.clave)} · ${esc(x.unidad || "PZA")}</span></div>
         <input type="number" min="0" step="0.01" value="${x.cantidad}" onchange="cambiarCantidad(${i},this.value)">
         ${esDueno() ? `<input type="number" min="0" step="0.01" value="${x.precio}" onchange="cambiarPrecio(${i},this.value)">`
                     : `<div class="imp">${money(numero(x.cantidad) * numero(x.precio))}</div>`}
@@ -1069,7 +1069,7 @@ function pintarRecibo() {
             .map((x) => `<span class="badge b-enviada">${esc(x)}</span>`).join("")}
         </div>
         <p style="font-size:11.5px;color:var(--slate);margin-top:8px">
-          Van siempre en esta tarifa y su costo ya está considerado en el precio por panel.</p>` : ""}
+          Van siempre en esta tarifa y su costo ya está considerado en el valor del proyecto.</p>` : ""}
     </div>
 
     <div class="card">
@@ -1322,7 +1322,7 @@ function calcRecibo() {
       <b>${r.guia.inversores} inversor${r.guia.inversores === 1 ? "" : "es"} ${esc(paramTar().guia_marca || "")} ${esc(r.guia.modelo)}</b>
       · ${esc(r.guia.capacidad_ac)}<br>
       <span style="color:var(--slate)">${esc(r.guia.nota)}${r.cobraInv && r.precioInv > 0
-        ? ` · ${money(r.precioInv)} c/u` : " · incluido en el precio por panel"}</span></div>` : ""}
+        ? " · se cobra por separado" : " · incluido en el valor del proyecto"}</span></div>` : ""}
 
     <div class="spec" style="margin-bottom:6px">
       <div><span>Tarifa</span><b>${esc(r.tar.clave || "")} · ${esc(d.tension)} V</b></div>
@@ -1333,7 +1333,6 @@ function calcRecibo() {
       <div><span>Producción mensual</span><b>${n(r.produccionMes, 0)} kWh</b></div>
       <div><span>Inversores</span><b>${r.inversores > 0 ? n(r.inversores, 0) : "por definir"}${
         r.guia && r.inversores === r.invSugeridos ? " · " + esc(r.guia.capacidad_ac) : ""}</b></div>
-      <div><span>Precio por panel</span><b>${money(r.precioPanel)}</b></div>
     </div>
 
     <div class="total-row"><span>Valor del proyecto</span><b>${money(r.valor)}</b></div>
