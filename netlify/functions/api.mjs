@@ -1,8 +1,23 @@
 import {
   db, json, err, hashPassword, verifyPassword, signToken,
   sesion, esDueno, num, limpio, siguienteFolio, ultimoFolio, conFolio,
-  totalDePartidas, fotoValida,
+  totalDePartidas, fotoValida, claveNombre, claveRpu,
 } from "../lib/core.mjs";
+
+/* Busca un cliente que ya exista con el mismo nombre (sin acentos ni signos) o
+   con el mismo número de servicio. La comparación se hace en la aplicación y no
+   en la consulta, porque la lista de clientes es chica y así se aprovecha la
+   misma normalización que usa el buscador. */
+async function clienteRepetido(nombre, referencia, excluirId = 0) {
+  const clave = claveNombre(nombre);
+  const rpu = claveRpu(referencia);
+  if (!clave && !rpu) return null;
+  const filas = await db.sql`SELECT id, nombre, referencia, creado_por FROM clientes`;
+  return filas.find((c) =>
+    c.id !== excluirId &&
+    ((clave && claveNombre(c.nombre) === clave) ||
+     (rpu && rpu.length >= 5 && claveRpu(c.referencia) === rpu))) || null;
+}
 
 export const config = { path: "/api/*" };
 
@@ -169,6 +184,26 @@ export default async (req) => {
       if (metodo === "POST") {
         const nombre = limpio(cuerpo.nombre, 160);
         if (!nombre) return err("El nombre del cliente es obligatorio.");
+
+        const ya = await clienteRepetido(nombre, cuerpo.referencia);
+        if (ya) {
+          const mio = esDueno(yo) || ya.creado_por === yo.id;
+          const porRpu = claveRpu(cuerpo.referencia) &&
+                         claveRpu(ya.referencia) === claveRpu(cuerpo.referencia);
+          /* Muchas razones sociales terminan en punto; se recorta para no
+             escribir dos puntos seguidos en el aviso. */
+          const suNombre = String(ya.nombre).replace(/[.\s]+$/, "");
+          return json({
+            error: porRpu
+              ? `Ya existe un cliente con el número de servicio ${ya.referencia}: ${suNombre}.`
+              : `Ya existe un cliente con ese nombre: ${suNombre}.`,
+            cliente: mio ? { id: ya.id, nombre: ya.nombre } : null,
+            mensaje_extra: mio
+              ? "Ábrelo y edítalo en lugar de crear otro."
+              : "Está registrado por otro vendedor. Pídele al administrador que te lo asigne.",
+          }, 409);
+        }
+
         const [c] = await db.sql`
           INSERT INTO clientes (nombre, contacto, telefono, correo, direccion, referencia, notas, creado_por)
           VALUES (${nombre}, ${limpio(cuerpo.contacto, 120)}, ${limpio(cuerpo.telefono, 40)},
@@ -182,6 +217,16 @@ export default async (req) => {
         const [c] = await db.sql`SELECT * FROM clientes WHERE id = ${id}`;
         if (!c) return err("Cliente no encontrado.", 404);
         if (!esDueno(yo) && c.creado_por !== yo.id) return err("No puedes editar este cliente.", 403);
+
+        const ya = await clienteRepetido(cuerpo.nombre ?? c.nombre, cuerpo.referencia, id);
+        if (ya) {
+          const mio = esDueno(yo) || ya.creado_por === yo.id;
+          return json({
+            error: `Ese nombre o número de servicio ya lo tiene otro cliente: ${String(ya.nombre).replace(/[.\s]+$/, "")}.`,
+            cliente: mio ? { id: ya.id, nombre: ya.nombre } : null,
+          }, 409);
+        }
+
         await db.sql`
           UPDATE clientes SET
             nombre     = COALESCE(${limpio(cuerpo.nombre, 160)}, nombre),
@@ -317,14 +362,16 @@ export default async (req) => {
         const filas = esDueno(yo)
           ? await db.sql`
               SELECT c.id, c.folio, c.estatus, c.total, c.linea, c.tipo, c.creado_en, c.actualizado_en,
-                     cl.nombre AS cliente, u.nombre AS vendedor
+                     cl.nombre AS cliente, cl.referencia AS cliente_rpu,
+                     c.recibo->>'no_servicio' AS recibo_rpu, u.nombre AS vendedor
               FROM cotizaciones c
               LEFT JOIN clientes cl ON cl.id = c.cliente_id
               LEFT JOIN usuarios u ON u.id = c.vendedor_id
               ORDER BY c.creado_en DESC LIMIT 300`
           : await db.sql`
               SELECT c.id, c.folio, c.estatus, c.total, c.linea, c.tipo, c.creado_en, c.actualizado_en,
-                     cl.nombre AS cliente
+                     cl.nombre AS cliente, cl.referencia AS cliente_rpu,
+                     c.recibo->>'no_servicio' AS recibo_rpu
               FROM cotizaciones c
               LEFT JOIN clientes cl ON cl.id = c.cliente_id
               WHERE c.vendedor_id = ${yo.id}
@@ -335,7 +382,7 @@ export default async (req) => {
         const partidas = Array.isArray(cuerpo.partidas) ? cuerpo.partidas : [];
         const c = await conFolio(async (folio) => {
           const [fila] = await db.sql`
-            INSERT INTO cotizaciones (folio, cliente_id, vendedor_id, estatus, linea, tipo, tecnico, partidas, ahorro, recibo, recibo_foto, comentarios, total)
+            INSERT INTO cotizaciones (folio, cliente_id, vendedor_id, estatus, linea, tipo, tecnico, partidas, ahorro, recibo, recibo_foto, foto_producto, comentarios, total)
             VALUES (${folio}, ${num(cuerpo.cliente_id) || null}, ${yo.id},
                     ${limpio(cuerpo.estatus, 20) || "borrador"},
                     ${limpio(cuerpo.linea, 20) || "fotovoltaico"}, ${limpio(cuerpo.tipo, 10) || "formal"},
@@ -344,6 +391,7 @@ export default async (req) => {
                     ${JSON.stringify(cuerpo.ahorro || {})}::jsonb,
                     ${JSON.stringify(cuerpo.recibo || {})}::jsonb,
                     ${fotoValida(cuerpo.recibo_foto)},
+                    ${fotoValida(cuerpo.foto_producto)},
                     ${limpio(cuerpo.comentarios, 2000)}, ${totalDePartidas(partidas)})
             RETURNING *`;
           return fila;
@@ -366,6 +414,8 @@ export default async (req) => {
             recibo         = COALESCE(${cuerpo.recibo ? JSON.stringify(cuerpo.recibo) : null}::jsonb, recibo),
             recibo_foto    = CASE WHEN ${cuerpo.recibo_foto === "" ? true : false} THEN NULL
                                   ELSE COALESCE(${fotoValida(cuerpo.recibo_foto)}, recibo_foto) END,
+            foto_producto  = CASE WHEN ${cuerpo.foto_producto === "" ? true : false} THEN NULL
+                                  ELSE COALESCE(${fotoValida(cuerpo.foto_producto)}, foto_producto) END,
             comentarios    = COALESCE(${limpio(cuerpo.comentarios, 2000)}, comentarios),
             total          = ${totalDePartidas(partidas)},
             actualizado_en = NOW()

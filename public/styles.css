@@ -142,6 +142,14 @@ textarea{min-height:84px;resize:vertical}
 .vacio{text-align:center;color:var(--slate);font-size:13.5px;padding:34px 16px}
 .cargando{text-align:center;color:var(--slate);font-size:13px;padding:26px}
 
+/* ---------- buscador de listas ---------- */
+.buscador{position:relative;margin-bottom:12px}
+.buscador input{padding-right:74px}
+.buscador span{position:absolute;right:12px;top:50%;transform:translateY(-50%);
+  font-size:11.5px;font-weight:700;color:var(--slate);pointer-events:none}
+.sin-resultados{background:#fff;border:1px dashed var(--line);border-radius:var(--r);
+  padding:22px 16px;text-align:center;color:var(--slate);font-size:13.5px}
+
 /* ---------- documento imprimible ---------- */
 #doc{display:none}
 @media print{
@@ -192,9 +200,47 @@ label.f.destaca>span{color:var(--blue);font-weight:800}
 #doc table.rec tr.anio td{background:#e9f1fb;font-weight:700}
 #doc table.rec tr:last-child td{border-bottom:2px solid #0a3b7d;font-weight:700}
 
+/* ---------- hoja de anexo: la foto del producto ---------- */
+#doc .hoja.anexo{page-break-before:always;break-before:page}
+/* La caja tiene alto fijo para que la hoja se vea intencional con cualquier
+   foto: horizontal, vertical o cuadrada. La imagen se centra y nunca se recorta. */
+#doc .foto-anexo{margin-top:14px;border:1px solid #dbe4ef;border-radius:6px;padding:10px;
+  background:#f7fafd;height:6.6in;display:flex;align-items:center;justify-content:center;
+  break-inside:avoid;page-break-inside:avoid}
+#doc .foto-anexo img{max-width:100%;max-height:100%;width:auto;height:auto;
+  object-fit:contain;display:block;border-radius:3px}
+#doc .pie-anexo{margin-top:10px;font-size:11.5px;font-weight:700;color:#0a3b7d;text-align:center}
+
+/* ---------- vista previa de la cotización en pantalla ----------
+   Se ve la propuesta como quedará en papel, con una barra arriba para
+   imprimirla o guardarla en PDF. Antes se abría el diálogo de impresión de
+   golpe y el vendedor no alcanzaba a revisar nada. */
+body.previa{overflow:hidden}
+#doc.previa{display:block;position:fixed;inset:0;z-index:70;overflow:auto;
+  background:#6B7A90;padding:74px 10px calc(28px + env(safe-area-inset-bottom));
+  -webkit-overflow-scrolling:touch}
+#doc.previa .hoja-caja{margin:0 auto 14px;overflow:hidden}
+#doc.previa .hoja{background:#fff;padding:20px 18px;margin:0;
+  box-shadow:0 10px 30px rgba(0,0,0,.28);border-radius:3px;
+  transform-origin:top left}
+.previa-barra{position:fixed;top:0;left:0;right:0;z-index:71;display:flex;align-items:center;gap:10px;
+  justify-content:space-between;background:#fff;border-bottom:1px solid var(--line);
+  padding:10px 12px;padding-top:calc(10px + env(safe-area-inset-top))}
+.previa-barra[hidden]{display:none !important}
+.previa-barra span{font-size:12px;font-weight:700;color:var(--slate);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
 /* ---------- ajustes que sólo aplican al imprimir ----------
    Van al final del archivo para que ganen sobre las reglas de arriba. */
 @media print{
+  /* En la vista previa el documento está flotando sobre la pantalla; al
+     imprimir tiene que volver a ser un documento normal o no se pagina. */
+  .previa-barra{display:none !important}
+  #doc.previa{position:static;overflow:visible;padding:0;background:none;z-index:auto}
+  #doc.previa .hoja-caja{height:auto !important;width:auto !important;overflow:visible}
+  #doc.previa .hoja{background:none;padding:0;margin:0 auto;box-shadow:none;border-radius:0;
+    width:auto !important;transform:none !important}
+
   /* La propuesta debe caber en una hoja: al imprimir se aprieta un poco el
      interlineado para que el pie no se brinque solo a la página siguiente. */
   #doc .hoja{font-size:11px}

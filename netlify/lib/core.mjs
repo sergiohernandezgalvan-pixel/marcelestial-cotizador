@@ -127,6 +127,28 @@ export async function conFolio(intentar, intentos = 8) {
   throw ultimo;
 }
 
+/* Nombre normalizado para comparar clientes. Se quitan acentos, mayúsculas,
+   signos y **también los espacios**, porque en los recibos y en las capturas la
+   misma razón social aparece de mil formas:
+     "PLÁSTICOS ALICA, S.A. DE C.V."  ·  "plasticos alica sa de cv"
+     "Benítez Albiter Lucia Maria"    ·  "Benítez Albiter lucia María"
+   Al final se recorta la forma legal (SA DE CV, S DE RL DE CV, SAS…) para que
+   "Plásticos Alica" y "Plásticos Alica S.A. de C.V." se reconozcan como el
+   mismo cliente. Se recorta sólo la forma completa: un "SA" suelto al final no
+   se toca, porque hay nombres que terminan así de verdad. */
+export function claveNombre(v) {
+  const t = String(v || "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+  return t.replace(/(?:SAPIDECV|SADECV|SDERLDECV|SRLDECV|SDERL|SRL|SAPI|SAS)$/, "");
+}
+
+/* El RPU se compara sólo por sus dígitos y letras, sin espacios ni guiones. */
+export function claveRpu(v) {
+  return String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
 export function totalDePartidas(partidas) {
   return (Array.isArray(partidas) ? partidas : []).reduce(
     (acc, p) => acc + num(p.cantidad) * num(p.precio),

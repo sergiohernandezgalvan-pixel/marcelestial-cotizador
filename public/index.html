@@ -58,6 +58,11 @@
   <section class="vista" id="v-cot" hidden>
     <h2 class="tit">Cotizaciones</h2>
     <p class="des" id="cotDes">Tus propuestas técnico-económicas</p>
+    <div class="buscador">
+      <input id="qCot" type="search" autocomplete="off" inputmode="search"
+             placeholder="Buscar por cliente, folio o No. de servicio (RPU)">
+      <span id="qCotCuenta"></span>
+    </div>
     <div id="listaCot"></div>
   </section>
 
@@ -65,6 +70,11 @@
   <section class="vista" id="v-cli" hidden>
     <h2 class="tit">Clientes</h2>
     <p class="des">Directorio de clientes y prospectos</p>
+    <div class="buscador">
+      <input id="qCli" type="search" autocomplete="off" inputmode="search"
+             placeholder="Buscar por nombre, No. de servicio (RPU) o teléfono">
+      <span id="qCliCuenta"></span>
+    </div>
     <div id="listaCli"></div>
   </section>
 
@@ -109,6 +119,12 @@
 </div>
 
 <!-- ============ DOCUMENTO IMPRIMIBLE ============ -->
+<!-- La barra sólo se ve en la vista previa; al imprimir desaparece. -->
+<div class="previa-barra" id="previaBarra" hidden>
+  <button class="btn sec sm" onclick="cerrarPrevia()">← Volver</button>
+  <span id="previaFolio"></span>
+  <button class="btn pri sm" onclick="imprimirAhora()">Imprimir o guardar PDF</button>
+</div>
 <div id="doc"></div>
 
 <script src="/app.js"></script>

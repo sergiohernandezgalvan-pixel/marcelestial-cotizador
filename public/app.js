@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.08.19-3";
+const VERSION = "2026.08.20-3";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -43,9 +43,32 @@ async function api(ruta, opciones = {}) {
   });
   const datos = await r.json().catch(() => ({}));
   if (r.status === 401 && S.token) { salir(); throw new Error("Sesión expirada"); }
-  if (!r.ok) throw new Error(datos.error || "Error " + r.status);
+  if (!r.ok) {
+    /* El error lleva consigo la respuesta completa: así quien lo atrapa puede
+       usar, por ejemplo, el cliente repetido que devolvió el servidor. */
+    const e = new Error(datos.error || "Error " + r.status);
+    e.datos = datos;
+    e.status = r.status;
+    throw e;
+  }
   return datos;
 }
+
+/* Bloquea un botón mientras se guarda. Sin esto, dos toques seguidos en un
+   teléfono con señal lenta mandan dos altas y se duplica el registro. */
+async function conBoton(boton, trabajo, textoOcupado = "Guardando…") {
+  if (!boton) return trabajo();
+  if (boton.disabled) return;                 // ya se está guardando
+  const antes = boton.textContent;
+  boton.disabled = true;
+  boton.textContent = textoOcupado;
+  try { return await trabajo(); }
+  finally { boton.disabled = false; boton.textContent = antes; }
+}
+
+/* Texto normalizado para buscar: sin acentos y en minúsculas. */
+const paraBuscar = (v) => String(v || "")
+  .normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
 /* ---------------- avisos ---------------- */
 function aviso(el, texto, tipo = "err") {
@@ -212,18 +235,46 @@ async function verCotizaciones() {
       $("#listaCot").innerHTML = `<div class="vacio">Todavía no hay cotizaciones.<br>Toca el botón <b>+</b> para crear la primera.</div>`;
       return;
     }
-    $("#listaCot").innerHTML = S.cotizaciones.map((c) => `
+    pintarCotizaciones();
+  } catch (e) { $("#listaCot").innerHTML = `<div class="vacio">${esc(e.message)}</div>`; }
+}
+
+/* El buscador de cotizaciones mira el cliente, el folio y los dos números de
+   servicio: el que trae la ficha del cliente y el que se capturó del recibo. */
+function pintarCotizaciones() {
+  const q = paraBuscar($("#qCot") ? $("#qCot").value : "").trim();
+  const lista = !q ? S.cotizaciones : S.cotizaciones.filter((c) => {
+    const heno = paraBuscar([c.cliente, c.folio, c.cliente_rpu, c.recibo_rpu,
+                             c.vendedor, ESTATUS[c.estatus]].filter(Boolean).join(" "));
+    const solo = (v) => String(v || "").replace(/[^0-9a-zA-Z]/g, "").toLowerCase();
+    const qn = solo(q);
+    return heno.includes(q) ||
+           (qn.length >= 3 && (solo(c.cliente_rpu).includes(qn) ||
+                               solo(c.recibo_rpu).includes(qn) ||
+                               solo(c.folio).includes(qn)));
+  });
+
+  const cuenta = $("#qCotCuenta");
+  if (cuenta) cuenta.textContent = q ? `${lista.length} de ${S.cotizaciones.length}` : "";
+
+  $("#listaCot").innerHTML = !lista.length
+    ? `<div class="sin-resultados">Ninguna cotización coincide con <b>${esc($("#qCot").value)}</b>.<br>
+         Se busca por cliente, folio y número de servicio (RPU).</div>`
+    : lista.map((c) => {
+        const rpu = c.recibo_rpu || c.cliente_rpu;
+        return `
       <div class="item" onclick="abrirCotizacion(${c.id})">
         <div class="m">
           <b>${esc(c.cliente || "Sin cliente")}</b>
           <span>${esc(c.folio)} · ${LINEAS[c.linea] || ""}${c.tipo === "rapida" ? " · rápida" : ""} · ${fecha(c.creado_en)}${esDueno() ? " · " + esc(c.vendedor || "") : ""}</span>
+          ${rpu ? `<span>RPU ${esc(rpu)}</span>` : ""}
         </div>
         <div class="r">
           <b>${money(c.total)}</b>
           <span class="badge b-${c.estatus}">${ESTATUS[c.estatus] || c.estatus}</span>
         </div>
-      </div>`).join("");
-  } catch (e) { $("#listaCot").innerHTML = `<div class="vacio">${esc(e.message)}</div>`; }
+      </div>`;
+      }).join("");
 }
 
 function nuevaCotizacion() {
@@ -316,6 +367,27 @@ function editor() {
       <div id="ahResumen" style="font-size:13px;color:var(--slate)"></div>
     </div>
 
+    <div class="card">
+      <h3>Foto del producto</h3>
+      <p style="font-size:11.5px;color:var(--slate);margin-bottom:12px">
+        La que se imprime al final de la propuesta. Se elige del carrete.</p>
+      <div class="foto-caja">
+        <div id="edProdPrev"></div>
+        <div style="flex:1">
+          <input type="file" accept="image/*" id="edProd" hidden>
+          <div class="acciones">
+            <button class="btn sec sm" type="button" onclick="document.getElementById('edProd').click()">
+              ${e._full && e._full.foto_producto ? "Cambiar foto" : "Elegir del carrete"}</button>
+            <button class="btn dan sm" type="button" id="edProdQuitar" onclick="quitarFotoEditor()" hidden>
+              Quitar</button>
+          </div>
+          <p id="edProdNota" style="font-size:11px;color:var(--slate);margin-top:8px"></p>
+        </div>
+      </div>
+      <p style="font-size:11px;color:var(--slate);margin-top:10px">
+        Después de cambiarla, toca <b>Guardar</b>.</p>
+    </div>
+
     ${e._full && e._full.recibo_foto ? `
     <div class="card">
       <h3>Foto del recibo</h3>
@@ -332,11 +404,11 @@ function editor() {
     </div>
 
     <div class="acciones" style="margin-bottom:30px">
-      <button class="btn pri" onclick="guardarCotizacion()">Guardar</button>
-      ${e.id ? `<button class="btn sec" onclick="imprimirCotizacion()">Ver / PDF</button>
+      <button class="btn pri" onclick="guardarCotizacion(this)">Guardar</button>
+      ${e.id ? `<button class="btn sec" onclick="imprimirCotizacion()">Vista previa</button>
                 ${e._full && e._full.recibo_foto
                   ? `<button class="btn sec" onclick="imprimirCotizacion(true)"
-                       title="Uso interno: incluye la foto del recibo">PDF con recibo</button>` : ""}
+                       title="Uso interno: incluye la foto del recibo">Vista previa con recibo</button>` : ""}
                 <button class="btn sec" onclick="verSeguimiento(${e.id})">Seguimiento</button>
                 <button class="btn dan" onclick="borrarCotizacion()">Borrar</button>` : ""}
     </div>`;
@@ -346,6 +418,9 @@ function editor() {
   $("#fab").hidden = true;
   window.scrollTo(0, 0);
   pintarPartidas();
+  S.edFotoProd = (e._full && e._full.foto_producto) || null;
+  $("#edProd")?.addEventListener("change", tomarFotoEditor);
+  pintarFotoEditor();
   ["ahActual", "ahNuevo"].forEach((id) => $("#" + id).addEventListener("input", calcAhorro));
   calcAhorro();
 }
@@ -414,7 +489,11 @@ window.elegirConcepto = (id) => {
   pintarPartidas();
 };
 
-async function guardarCotizacion() {
+async function guardarCotizacion(boton) {
+  return conBoton(boton, () => _guardarCotizacion());
+}
+
+async function _guardarCotizacion() {
   const e = S.editor;
   e.cliente_id = $("#edCliente").value;
   e.estatus = $("#edEstatus").value;
@@ -425,6 +504,7 @@ async function guardarCotizacion() {
     actual: numero($("#ahActual").value), nuevo: numero($("#ahNuevo").value),
     roi: numero($("#ahRoi").value), anual: numero($("#ahAnual").value),
   };
+  if (S.edFotoProd !== undefined) e.foto_producto = S.edFotoProd;
   if (!e.cliente_id) return aviso("#edAviso", "Selecciona un cliente antes de guardar.");
   if (!e.partidas.length) return aviso("#edAviso", "Agrega al menos un concepto.");
   try {
@@ -542,8 +622,97 @@ async function imprimirCotizacion(conRecibo = false) {
         y en las tarifas vigentes de CFE.
       </div>
     </div>
-    ${tablaRecuperacion(c, total)}`;
-  setTimeout(() => window.print(), 120);
+    ${tablaRecuperacion(c, total)}
+    ${hojaProducto(c)}`;
+  abrirPrevia(c.folio);
+}
+
+/* ---------- vista previa antes de imprimir ----------
+   El vendedor revisa la propuesta en pantalla —con la corrida de recuperación
+   incluida— y desde ahí decide imprimirla o guardarla en PDF. */
+function abrirPrevia(folio) {
+  $("#previaFolio").textContent = folio ? "Folio " + folio : "";
+  $("#previaBarra").hidden = false;
+  $("#doc").classList.add("previa");
+  document.body.classList.add("previa");
+  ajustarPrevia();
+  $("#doc").scrollTop = 0;
+}
+
+/* La hoja mide 7 pulgadas de ancho, como el papel. En un teléfono no cabe, así
+   que se encoge completa —igual que el zoom de un PDF— en lugar de reacomodar
+   el texto: así lo que ve el vendedor es lo que va a salir impreso. */
+function ajustarPrevia() {
+  const doc = $("#doc");
+  const ANCHO = 672;                                  // 7 pulgadas a 96 puntos
+  const z = Math.min(1, (doc.clientWidth - 20) / ANCHO);
+  doc.querySelectorAll(".hoja").forEach((hoja) => {
+    let caja = hoja.parentElement;
+    if (!caja.classList.contains("hoja-caja")) {      // se envuelve una sola vez
+      caja = document.createElement("div");
+      caja.className = "hoja-caja";
+      hoja.parentNode.insertBefore(caja, hoja);
+      caja.appendChild(hoja);
+    }
+    hoja.style.width = ANCHO + "px";
+    hoja.style.transform = z < 1 ? `scale(${z})` : "";
+    /* el alto real de la hoja sin encoger, para que la caja ocupe lo justo */
+    caja.style.height = Math.ceil(hoja.offsetHeight * z) + "px";
+    caja.style.width = Math.ceil(ANCHO * z) + "px";
+  });
+}
+
+window.addEventListener("resize", () => {
+  if (document.body.classList.contains("previa")) ajustarPrevia();
+});
+
+function cerrarPrevia() {
+  $("#previaBarra").hidden = true;
+  $("#doc").classList.remove("previa");
+  document.body.classList.remove("previa");
+}
+
+function imprimirAhora() { setTimeout(() => window.print(), 60); }
+
+/* El botón físico de "atrás" del teléfono cierra la vista previa en lugar de
+   sacar al vendedor de la aplicación. */
+window.addEventListener("popstate", () => {
+  if (document.body.classList.contains("previa")) cerrarPrevia();
+});
+
+/* Hoja de anexo: la foto que el vendedor eligió de su carrete. Sólo aparece si
+   hay foto; sin ella la propuesta sale igual, en dos hojas. */
+function hojaProducto(c) {
+  if (!c.foto_producto) return "";
+  const t = c.tecnico || {};
+  const pie = [
+    t.wpanel ? `Panel de ${t.wpanel} W` : "",
+    t.marcainversor ? `Inversor ${t.marcainversor}${t.capinversor ? " · " + t.capinversor : ""}` : "",
+    "Estructura de aluminio anodizado de fabricación propia",
+  ].filter(Boolean).join(" · ");
+
+  return `
+    <div class="hoja anexo">
+      <div class="dh">
+        <div><h1>El equipo que se instala</h1>
+          <div style="font-size:11.5px;color:#6b7280;margin-top:4px">
+            Folio ${esc(c.folio || "")} · ${esc(c.cliente_nombre || "")}</div></div>
+        <img src="/icons/logo.png" alt="">
+      </div>
+
+      <div class="foto-anexo"><img src="${c.foto_producto}" alt="Equipo del sistema fotovoltaico"></div>
+      ${pie ? `<p class="pie-anexo">${esc(pie)}</p>` : ""}
+
+      <p style="font-size:10.5px;color:#6b7280;margin-top:10px;line-height:1.5">
+        Imagen de referencia del equipo y de los materiales considerados en esta propuesta.
+        Las marcas y modelos definitivos se confirman en la visita técnica y quedan asentados
+        en el contrato.</p>
+
+      <div class="pie">
+        <b>Comercializadora Marcelestial S.A.S.</b> · Perfiles de aluminio · Sistemas fotovoltaicos · Soluciones eléctricas<br>
+        WhatsApp 55 7657 4769 · contacto@marcelestial.net · www.marcelestial.net · CDMX y Estado de México
+      </div>
+    </div>`;
 }
 
 const MESES_CORTO = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
@@ -704,7 +873,7 @@ function rapidaFV() {
     <div class="card" id="rpResultado"></div>
 
     <div class="acciones" style="margin-bottom:30px">
-      <button class="btn pri" onclick="guardarRapida()">Guardar y generar PDF</button>
+      <button class="btn pri" onclick="guardarRapida(this)">Guardar y generar PDF</button>
     </div>`;
 
   $$(".vista").forEach((x) => (x.hidden = true));
@@ -792,7 +961,11 @@ function ahorroRapida() {
   };
 }
 
-async function guardarRapida() {
+async function guardarRapida(boton) {
+  return conBoton(boton, () => _guardarRapida());
+}
+
+async function _guardarRapida() {
   const cliente = $("#rpCliente").value;
   if (!cliente) return aviso("#rpAviso", "Selecciona un cliente.");
   const { lista, kwp, inv, paneles, w } = partidasFV();
@@ -845,7 +1018,7 @@ function rapidaCatalogo(linea) {
       <div class="total-row"><span>Total</span><b id="rpTotal">$0.00</b></div>
     </div>
     <div class="acciones" style="margin-bottom:30px">
-      <button class="btn pri" onclick="guardarRapidaCat()">Guardar y generar PDF</button>
+      <button class="btn pri" onclick="guardarRapidaCat(this)">Guardar y generar PDF</button>
     </div>`;
   $$(".vista").forEach((x) => (x.hidden = true));
   $("#v-editor").hidden = false;
@@ -864,7 +1037,11 @@ window.calcCat = () => {
   $("#rpTotal").textContent = money(total);
 };
 
-async function guardarRapidaCat() {
+async function guardarRapidaCat(boton) {
+  return conBoton(boton, () => _guardarRapidaCat());
+}
+
+async function _guardarRapidaCat() {
   const cliente = $("#rpCliente").value;
   if (!cliente) return aviso("#rpAviso", "Selecciona un cliente.");
   const lista = [];
@@ -1009,6 +1186,7 @@ function rapidaRecibo() {
   S.rcTarifa = tarifas[0].clave;
   S.rcValores = {};
   S.rcFoto = null;
+  S.rcFotoProd = null;
   pintarRecibo();
 }
 
@@ -1139,10 +1317,31 @@ function pintarRecibo() {
       </div>
     </div>
 
+    <div class="card">
+      <h3>Foto del producto</h3>
+      <p style="font-size:11.5px;color:var(--slate);margin-bottom:12px">
+        Opcional. Elige una foto de tu carrete —el panel, el inversor, la estructura o una
+        obra parecida ya terminada—. <b>Ésta sí se imprime</b>, en una hoja al final de la
+        propuesta.</p>
+      <div class="foto-caja">
+        <div id="rcProdPrev"></div>
+        <div style="flex:1">
+          <input type="file" accept="image/*" id="rcProd" hidden>
+          <div class="acciones">
+            <button class="btn sec sm" type="button" onclick="document.getElementById('rcProd').click()">
+              Elegir del carrete</button>
+            <button class="btn dan sm" type="button" id="rcProdQuitar" onclick="quitarFotoProducto()" hidden>
+              Quitar</button>
+          </div>
+          <p id="rcProdNota" style="font-size:11px;color:var(--slate);margin-top:8px"></p>
+        </div>
+      </div>
+    </div>
+
     <div class="card" id="rcResultado"></div>
 
     <div class="acciones" style="margin-bottom:30px">
-      <button class="btn pri" onclick="guardarRecibo()">Guardar y generar PDF</button>
+      <button class="btn pri" onclick="guardarRecibo(this)">Guardar y generar PDF</button>
     </div>`;
 
   $$(".vista").forEach((x) => (x.hidden = true));
@@ -1152,7 +1351,9 @@ function pintarRecibo() {
   ["rcBase","rcInter","rcPunta","rcConsumo","rcDias","rcPago","rcModulos","rcInversores","rcPrecio","rcDemanda","rcServicio"]
     .forEach((id) => { const n = $("#" + id); if (n) n.addEventListener("input", () => { recordarRecibo(); calcRecibo(); }); });
   $("#rcFoto")?.addEventListener("change", tomarFoto);
+  $("#rcProd")?.addEventListener("change", tomarFotoProducto);
   pintarFoto();
+  pintarFotoProducto();
   calcRecibo();
 }
 
@@ -1183,6 +1384,74 @@ async function tomarFoto(ev) {
 }
 
 window.quitarFoto = () => { S.rcFoto = null; pintarFoto(); };
+
+/* ---- foto del producto: se elige del carrete y SÍ se imprime ----
+   No lleva el atributo "capture", así que el teléfono abre la galería en lugar
+   de la cámara. */
+async function tomarFotoProducto(ev) {
+  const archivo = ev.target.files && ev.target.files[0];
+  if (!archivo) return;
+  try {
+    let datos = await comprimirImagen(archivo, 1500, 0.78);
+    if (datos.length > 1600000) datos = await comprimirImagen(archivo, 1100, 0.65);
+    S.rcFotoProd = datos;
+    pintarFotoProducto();
+  } catch {
+    aviso("#rcAviso", "No se pudo leer la imagen. Intenta con otra foto.");
+  } finally { ev.target.value = ""; }
+}
+
+window.quitarFotoProducto = () => { S.rcFotoProd = null; pintarFotoProducto(); };
+
+/* La misma foto, pero dentro de una cotización ya guardada. */
+async function tomarFotoEditor(ev) {
+  const archivo = ev.target.files && ev.target.files[0];
+  if (!archivo) return;
+  try {
+    let datos = await comprimirImagen(archivo, 1500, 0.78);
+    if (datos.length > 1600000) datos = await comprimirImagen(archivo, 1100, 0.65);
+    S.edFotoProd = datos;
+    pintarFotoEditor();
+    aviso("#edAviso", "Foto lista. Toca Guardar para que quede en la cotización.", "ok");
+  } catch {
+    aviso("#edAviso", "No se pudo leer la imagen. Intenta con otra foto.");
+  } finally { ev.target.value = ""; }
+}
+
+window.quitarFotoEditor = () => {
+  S.edFotoProd = "";                       // cadena vacía = quitarla al guardar
+  pintarFotoEditor();
+  aviso("#edAviso", "Se quitará al guardar.", "ok");
+};
+
+function pintarFotoEditor() {
+  const caja = $("#edProdPrev"); if (!caja) return;
+  const quitar = $("#edProdQuitar"), nota = $("#edProdNota");
+  if (S.edFotoProd) {
+    caja.innerHTML = `<img src="${S.edFotoProd}" alt="Foto del producto">`;
+    if (quitar) quitar.hidden = false;
+    if (nota) nota.textContent = "Se imprime en la última hoja.";
+  } else {
+    caja.innerHTML = '<div class="foto-vacia">Sin foto</div>';
+    if (quitar) quitar.hidden = true;
+    if (nota) nota.textContent = "Sin foto la propuesta sale en dos hojas.";
+  }
+}
+
+function pintarFotoProducto() {
+  const caja = $("#rcProdPrev"); if (!caja) return;
+  const quitar = $("#rcProdQuitar"), nota = $("#rcProdNota");
+  if (S.rcFotoProd) {
+    caja.innerHTML = `<img src="${S.rcFotoProd}" alt="Foto del producto">`;
+    if (quitar) quitar.hidden = false;
+    if (nota) nota.textContent = "Se imprimirá al final · "
+      + Math.round(S.rcFotoProd.length / 1400) + " KB aprox.";
+  } else {
+    caja.innerHTML = '<div class="foto-vacia">Sin foto</div>';
+    if (quitar) quitar.hidden = true;
+    if (nota) nota.textContent = "Sin foto la propuesta sale igual, sólo sin la hoja del anexo.";
+  }
+}
 
 function pintarFoto() {
   const caja = $("#rcFotoPrev"); if (!caja) return;
@@ -1351,7 +1620,11 @@ function calcRecibo() {
     </div>`;
 }
 
-async function guardarRecibo() {
+async function guardarRecibo(boton) {
+  return conBoton(boton, () => _guardarRecibo());
+}
+
+async function _guardarRecibo() {
   const cliente = $("#rcCliente").value;
   if (!cliente) return aviso("#rcAviso", "Selecciona un cliente.");
   const d = datosRecibo();
@@ -1363,6 +1636,7 @@ async function guardarRecibo() {
     const { cotizacion } = await api("cotizaciones", { method: "POST", body: {
       cliente_id: cliente, estatus: "borrador", linea: "fotovoltaico", tipo: "rapida",
       recibo_foto: S.rcFoto || null,
+      foto_producto: S.rcFotoProd || null,
       partidas: [
         { clave: "SISTEMA-FV",
           descripcion: `Sistema fotovoltaico interconectado · ${r.usar} módulos de ${r.panel.clave} · ${r.kwp.toFixed(2)} kWp · tarifa ${r.tar.clave} en ${d.tension} V`
@@ -1592,12 +1866,30 @@ Object.assign(window, { rapidaRecibo, guardarRecibo, calcRecibo, formDimensionam
 
 /* ---------------- clientes ---------------- */
 function verClientes() {
-  $("#listaCli").innerHTML = !S.clientes.length
-    ? '<div class="vacio">Sin clientes todavía.<br>Toca <b>+</b> para agregar el primero.</div>'
-    : S.clientes.map((c) => `
+  if (!S.clientes.length) {
+    $("#listaCli").innerHTML = '<div class="vacio">Sin clientes todavía.<br>Toca <b>+</b> para agregar el primero.</div>';
+    if ($("#qCliCuenta")) $("#qCliCuenta").textContent = "";
+    return;
+  }
+  const q = paraBuscar($("#qCli") ? $("#qCli").value : "").trim();
+  const solo = (v) => String(v || "").replace(/[^0-9a-zA-Z]/g, "").toLowerCase();
+  const qn = solo(q);
+  const lista = !q ? S.clientes : S.clientes.filter((c) =>
+    paraBuscar([c.nombre, c.contacto, c.telefono, c.correo, c.direccion, c.referencia]
+      .filter(Boolean).join(" ")).includes(q) ||
+    (qn.length >= 3 && (solo(c.referencia).includes(qn) || solo(c.telefono).includes(qn))));
+
+  const cuenta = $("#qCliCuenta");
+  if (cuenta) cuenta.textContent = q ? `${lista.length} de ${S.clientes.length}` : "";
+
+  $("#listaCli").innerHTML = !lista.length
+    ? `<div class="sin-resultados">Ningún cliente coincide con <b>${esc($("#qCli").value)}</b>.<br>
+         Se busca por nombre, número de servicio (RPU), teléfono y correo.</div>`
+    : lista.map((c) => `
       <div class="item" onclick='formCliente(${c.id})'>
         <div class="m"><b>${esc(c.nombre)}</b>
-        <span>${esc(c.telefono || c.correo || c.direccion || "Sin datos de contacto")}</span></div>
+        <span>${esc(c.telefono || c.correo || c.direccion || "Sin datos de contacto")}</span>
+        ${c.referencia ? `<span>RPU ${esc(c.referencia)}</span>` : ""}</div>
         <div class="r" style="color:var(--slate);font-size:19px">›</div>
       </div>`).join("");
 }
@@ -1620,14 +1912,36 @@ function formCliente(id = null) {
   $("#fCli").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const d = Object.fromEntries(new FormData(ev.target));
-    try {
-      if (id) await api("clientes", { method: "PATCH", body: { id, ...d } });
-      else await api("clientes", { method: "POST", body: d });
-      await cargarClientes();
-      cerrarModal();
-      if (vistaActual === "cli") verClientes();
-      if (S.editor && $("#edCliente")) editor();
-    } catch (x) { aviso("#modalError", x.message); }
+    const boton = ev.target.querySelector("button[type=submit]");
+    await conBoton(boton, async () => {
+      try {
+        if (id) await api("clientes", { method: "PATCH", body: { id, ...d } });
+        else await api("clientes", { method: "POST", body: d });
+        await cargarClientes();
+        cerrarModal();
+        if (vistaActual === "cli") verClientes();
+        if (S.editor && $("#edCliente")) editor();
+      } catch (x) {
+        /* Si el servidor avisa que el cliente ya existe, se ofrece abrirlo en
+           lugar de crear otro. Es la causa de los clientes repetidos. */
+        const ya = x.status === 409 ? (x.datos || {}) : null;
+        if (ya && ya.cliente) {
+          aviso("#modalError", x.message + " " + (ya.mensaje_extra || ""));
+          const caja = $("#modalError");
+          const b = document.createElement("button");
+          b.className = "btn sec sm";
+          b.style.cssText = "margin-top:10px;display:flex";
+          b.type = "button";
+          b.textContent = "Abrir «" + ya.cliente.nombre + "»";
+          b.onclick = () => formCliente(ya.cliente.id);
+          caja.appendChild(b);
+        } else if (ya) {
+          aviso("#modalError", x.message + " " + (ya.mensaje_extra || ""));
+        } else {
+          aviso("#modalError", x.message);
+        }
+      }
+    });
   });
 }
 
@@ -2031,12 +2345,23 @@ function abrirModal(titulo, html) {
   $("#modal").hidden = false;
 }
 function cerrarModal() { $("#modal").hidden = true; }
+
+/* Los dos buscadores filtran lo que ya está cargado: no vuelven a consultar al
+   servidor, así que responden al instante aunque la señal esté lenta. */
+["qCot", "qCli"].forEach((id) => {
+  const caja = $("#" + id);
+  if (!caja) return;
+  const pintar = id === "qCot" ? () => pintarCotizaciones() : () => verClientes();
+  caja.addEventListener("input", pintar);
+  caja.addEventListener("search", pintar);   // la "x" del campo de búsqueda
+});
 $("#modal").addEventListener("click", (e) => { if (e.target.id === "modal") cerrarModal(); });
 
 /* ---------------- exponer al HTML ---------------- */
 Object.assign(window, {
   ir, abrirCotizacion, nuevaCotizacion, agregarPartida, guardarCotizacion,
-  borrarCotizacion, imprimirCotizacion, formCliente, formMovimiento,
+  borrarCotizacion, imprimirCotizacion, cerrarPrevia, imprimirAhora,
+  formCliente, formMovimiento,
   formPassword, verCatalogo, formConcepto, verUsuarios, formUsuario, cerrarModal,
   formRapido, verSeguimiento, datosEjemplo, formCorreo, eliminarUsuario, confirmarEliminar,
   buscarActualizacion, formTarifas,
