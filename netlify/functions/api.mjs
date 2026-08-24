@@ -171,6 +171,114 @@ export default async (req) => {
       }
     }
 
+    /* ============ CLIENTES REPETIDOS (solo dueño) ============
+       Los que se dieron de alta antes de que existiera el aviso de duplicados.
+       Se agrupan por nombre y por número de servicio; el administrador decide
+       cuál se queda y a ése se le pasan las cotizaciones de los demás. */
+    if (ruta === "clientes/duplicados") {
+      if (!esDueno(yo)) return err("Solo el administrador puede unir clientes repetidos.", 403);
+      if (metodo !== "GET") return err("Método no permitido.", 405);
+
+      const filas = await db.sql`
+        SELECT c.id, c.nombre, c.contacto, c.telefono, c.correo, c.direccion,
+               c.referencia, c.notas, c.creado_en, u.nombre AS creador,
+               (SELECT COUNT(*)::int FROM cotizaciones q WHERE q.cliente_id = c.id) AS cotizaciones,
+               (SELECT COUNT(*)::int FROM movimientos m WHERE m.cliente_id = c.id) AS movimientos
+        FROM clientes c
+        LEFT JOIN usuarios u ON u.id = c.creado_por
+        ORDER BY c.creado_en, c.id`;
+
+      /* Cada cliente empieza en su propio grupo; si dos comparten nombre o
+         número de servicio, los grupos se juntan (así A-B por nombre y B-C
+         por RPU terminan los tres en el mismo grupo). */
+      const jefe = new Map(filas.map((c) => [c.id, c.id]));
+      const raiz = (id) => { while (jefe.get(id) !== id) id = jefe.get(id); return id; };
+      const unir = (a, b) => { const ra = raiz(a), rb = raiz(b); if (ra !== rb) jefe.set(rb, ra); };
+
+      const porNombre = new Map(), porRpu = new Map();
+      for (const c of filas) {
+        const kn = claveNombre(c.nombre);
+        if (kn) { if (porNombre.has(kn)) unir(porNombre.get(kn), c.id); else porNombre.set(kn, c.id); }
+        const kr = claveRpu(c.referencia);
+        if (kr && kr.length >= 5) { if (porRpu.has(kr)) unir(porRpu.get(kr), c.id); else porRpu.set(kr, c.id); }
+      }
+
+      const grupos = new Map();
+      for (const c of filas) {
+        const r = raiz(c.id);
+        if (!grupos.has(r)) grupos.set(r, []);
+        grupos.get(r).push(c);
+      }
+
+      const repetidos = [...grupos.values()]
+        .filter((g) => g.length > 1)
+        .map((g) => ({
+          motivo: new Set(g.map((c) => claveNombre(c.nombre))).size === 1 ? "nombre" : "referencia",
+          clientes: g.sort((a, b) =>
+            (b.cotizaciones + b.movimientos) - (a.cotizaciones + a.movimientos) || a.id - b.id),
+        }))
+        .sort((a, b) => b.clientes.length - a.clientes.length);
+
+      return json({ grupos: repetidos, total: filas.length });
+    }
+
+    if (ruta === "clientes/fusionar") {
+      if (!esDueno(yo)) return err("Solo el administrador puede unir clientes repetidos.", 403);
+      if (metodo !== "POST") return err("Método no permitido.", 405);
+
+      const conservar = num(cuerpo.conservar);
+      const quitar = (Array.isArray(cuerpo.quitar) ? cuerpo.quitar : [])
+        .map(num).filter((n) => n > 0 && n !== conservar);
+      if (!conservar || !quitar.length)
+        return err("Elige cuál cliente se queda y cuáles se unen a él.");
+
+      const [base] = await db.sql`SELECT * FROM clientes WHERE id = ${conservar}`;
+      if (!base) return err("El cliente que quieres conservar ya no existe.", 404);
+
+      let movidas = 0, movimientos = 0, borrados = 0;
+      const relleno = { contacto: base.contacto, telefono: base.telefono, correo: base.correo,
+                        direccion: base.direccion, referencia: base.referencia };
+      const notas = [base.notas].filter(Boolean);
+
+      for (const id of quitar) {
+        const [otro] = await db.sql`SELECT * FROM clientes WHERE id = ${id}`;
+        if (!otro) continue;
+
+        /* Primero se mueve el trabajo y hasta el final se borra el registro:
+           si algo falla a medio camino, no se pierde ninguna cotización. */
+        const [q] = await db.sql`
+          WITH m AS (UPDATE cotizaciones SET cliente_id = ${conservar} WHERE cliente_id = ${id} RETURNING 1)
+          SELECT COUNT(*)::int AS n FROM m`;
+        movidas += Number(q?.n || 0);
+
+        const [mv] = await db.sql`
+          WITH m AS (UPDATE movimientos SET cliente_id = ${conservar} WHERE cliente_id = ${id} RETURNING 1)
+          SELECT COUNT(*)::int AS n FROM m`;
+        movimientos += Number(mv?.n || 0);
+
+        /* Lo que el conservado tenga vacío se completa con el del repetido. */
+        for (const k of Object.keys(relleno))
+          if (!relleno[k] && otro[k]) relleno[k] = otro[k];
+        if (otro.notas && !notas.includes(otro.notas)) notas.push(otro.notas);
+
+        await db.sql`DELETE FROM clientes WHERE id = ${id}`;
+        borrados++;
+      }
+
+      const [cliente] = await db.sql`
+        UPDATE clientes SET
+          contacto   = ${relleno.contacto},
+          telefono   = ${relleno.telefono},
+          correo     = ${relleno.correo},
+          direccion  = ${relleno.direccion},
+          referencia = ${relleno.referencia},
+          notas      = ${notas.join(" · ").slice(0, 1000) || null}
+        WHERE id = ${conservar}
+        RETURNING *`;
+
+      return json({ ok: true, cliente, movidas, movimientos, borrados });
+    }
+
     /* ============ CLIENTES ============ */
     if (ruta === "clientes") {
       if (metodo === "GET") {
@@ -362,7 +470,7 @@ export default async (req) => {
         const filas = esDueno(yo)
           ? await db.sql`
               SELECT c.id, c.folio, c.estatus, c.total, c.linea, c.tipo, c.creado_en, c.actualizado_en,
-                     cl.nombre AS cliente, cl.referencia AS cliente_rpu,
+                     c.cliente_id, cl.nombre AS cliente, cl.referencia AS cliente_rpu,
                      c.recibo->>'no_servicio' AS recibo_rpu, u.nombre AS vendedor
               FROM cotizaciones c
               LEFT JOIN clientes cl ON cl.id = c.cliente_id
@@ -370,7 +478,7 @@ export default async (req) => {
               ORDER BY c.creado_en DESC LIMIT 300`
           : await db.sql`
               SELECT c.id, c.folio, c.estatus, c.total, c.linea, c.tipo, c.creado_en, c.actualizado_en,
-                     cl.nombre AS cliente, cl.referencia AS cliente_rpu,
+                     c.cliente_id, cl.nombre AS cliente, cl.referencia AS cliente_rpu,
                      c.recibo->>'no_servicio' AS recibo_rpu
               FROM cotizaciones c
               LEFT JOIN clientes cl ON cl.id = c.cliente_id

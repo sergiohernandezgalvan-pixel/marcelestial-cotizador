@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.08.21-2";
+const VERSION = "2026.08.24";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -149,7 +149,7 @@ function ir(v) {
   if (destino) destino.hidden = false;
   window.scrollTo(0, 0);
   $("#fab").hidden = !["cot", "cli"].includes(v);
-  $("#fab").onclick = v === "cot" ? menuNueva : v === "cli" ? formCliente : null;
+  $("#fab").onclick = v === "cot" ? menuNueva : v === "cli" ? () => formCliente() : null;
   if (v === "panel") verPanel();
   if (v === "cot") verCotizaciones();
   if (v === "cli") verClientes();
@@ -231,6 +231,7 @@ async function verCotizaciones() {
   $("#listaCot").innerHTML = '<div class="cargando">Cargando…</div>';
   try {
     S.cotizaciones = (await api("cotizaciones")).cotizaciones || [];
+    S.cotCargadas = true;
     if (!S.cotizaciones.length) {
       $("#listaCot").innerHTML = `<div class="vacio">Todavía no hay cotizaciones.<br>Toca el botón <b>+</b> para crear la primera.</div>`;
       return;
@@ -337,8 +338,7 @@ function editor() {
 
     <div class="card">
       <h3>Cliente y estatus</h3>
-      <label class="f"><span>Cliente</span>
-        <select id="edCliente"><option value="">— Selecciona —</option>${opcCli}</select></label>
+      ${campoCliente("edCliente", e.cliente_id || "")}
       <button class="btn sec sm" onclick="formCliente()">+ Nuevo cliente</button>
       <label class="f" style="margin-top:12px"><span>Estatus</span><select id="edEstatus">${opcEst}</select></label>
     </div>
@@ -417,6 +417,7 @@ function editor() {
   $("#v-editor").hidden = false;
   $("#fab").hidden = true;
   window.scrollTo(0, 0);
+  activarBuscadorCliente("edCliente");
   pintarPartidas();
   S.edFotoProd = (e._full && e._full.foto_producto) || null;
   $("#edProd")?.addEventListener("change", tomarFotoEditor);
@@ -494,6 +495,7 @@ async function guardarCotizacion(boton) {
 }
 
 async function _guardarCotizacion() {
+  S.cotCargadas = false;   /* la lista en memoria quedó vieja */
   const e = S.editor;
   e.cliente_id = $("#edCliente").value;
   e.estatus = $("#edEstatus").value;
@@ -521,6 +523,7 @@ async function _guardarCotizacion() {
 }
 
 async function borrarCotizacion() {
+  S.cotCargadas = false;   /* la lista en memoria quedó vieja */
   if (!confirm("¿Borrar esta cotización? No se puede deshacer.")) return;
   try { await api("cotizaciones?id=" + S.editor.id, { method: "DELETE" }); ir("cot"); }
   catch (e) { aviso("#edAviso", e.message); }
@@ -975,8 +978,7 @@ function rapidaFV() {
     <div class="aviso" id="rpAviso"></div>
 
     <div class="card">
-      <label class="f"><span>Cliente</span>
-        <select id="rpCliente"><option value="">— Selecciona —</option>${opcCli}</select></label>
+      ${campoCliente("rpCliente")}
       <button class="btn sec sm" onclick="formCliente()">+ Nuevo cliente</button>
     </div>
 
@@ -1016,6 +1018,7 @@ function rapidaFV() {
   $("#v-editor").hidden = false;
   $("#fab").hidden = true;
   window.scrollTo(0, 0);
+  activarBuscadorCliente("rpCliente");
   ["rpPaneles", "rpW", "rpInv", "rpPrecioKwh"].forEach((id) => $("#" + id).addEventListener("input", calcFV));
   calcFV();
 
@@ -1102,6 +1105,7 @@ async function guardarRapida(boton) {
 }
 
 async function _guardarRapida() {
+  S.cotCargadas = false;   /* la lista en memoria quedó vieja */
   const cliente = $("#rpCliente").value;
   if (!cliente) return aviso("#rpAviso", "Selecciona un cliente.");
   const { lista, kwp, inv, paneles, w } = partidasFV();
@@ -1138,8 +1142,7 @@ function rapidaCatalogo(linea) {
     </div>
     <div class="aviso" id="rpAviso"></div>
     <div class="card">
-      <label class="f"><span>Cliente</span>
-        <select id="rpCliente"><option value="">— Selecciona —</option>${opcCli}</select></label>
+      ${campoCliente("rpCliente")}
       <button class="btn sec sm" onclick="formCliente()">+ Nuevo cliente</button>
     </div>
     <div class="card">
@@ -1160,6 +1163,7 @@ function rapidaCatalogo(linea) {
   $("#v-editor").hidden = false;
   $("#fab").hidden = true;
   window.scrollTo(0, 0);
+  activarBuscadorCliente("rpCliente");
 }
 
 window.calcCat = () => {
@@ -1178,6 +1182,7 @@ async function guardarRapidaCat(boton) {
 }
 
 async function _guardarRapidaCat() {
+  S.cotCargadas = false;   /* la lista en memoria quedó vieja */
   const cliente = $("#rpCliente").value;
   if (!cliente) return aviso("#rpAviso", "Selecciona un cliente.");
   const lista = [];
@@ -1342,8 +1347,7 @@ function pintarRecibo() {
     <div class="aviso" id="rcAviso"></div>
 
     <div class="card">
-      <label class="f"><span>Cliente</span>
-        <select id="rcCliente"><option value="">— Selecciona —</option>${opcCli}</select></label>
+      ${campoCliente("rcCliente")}
       <button class="btn sec sm" onclick="formCliente()">+ Nuevo cliente</button>
     </div>
 
@@ -1484,6 +1488,7 @@ function pintarRecibo() {
   $("#v-editor").hidden = false;
   $("#fab").hidden = true;
   window.scrollTo(0, 0);
+  activarBuscadorCliente("rcCliente");
   ["rcBase","rcInter","rcPunta","rcConsumo","rcDias","rcPago","rcModulos","rcInversores","rcPrecio","rcDemanda","rcServicio"]
     .forEach((id) => { const n = $("#" + id); if (n) n.addEventListener("input", () => { recordarRecibo(); calcRecibo(); }); });
   $("#rcFoto")?.addEventListener("change", tomarFoto);
@@ -1761,6 +1766,7 @@ async function guardarRecibo(boton) {
 }
 
 async function _guardarRecibo() {
+  S.cotCargadas = false;   /* la lista en memoria quedó vieja */
   const cliente = $("#rcCliente").value;
   if (!cliente) return aviso("#rcAviso", "Selecciona un cliente.");
   const d = datosRecibo();
@@ -2000,8 +2006,108 @@ window.invAplicarTodos = () => {
 Object.assign(window, { rapidaRecibo, guardarRecibo, calcRecibo, formDimensionamiento,
                         calcularDimensionamiento, formTarifas, formInversores, pintarRecibo });
 
+/* ---------------- selector de cliente con buscador ----------------
+   El desplegable traía la lista entera y había que bajar hasta encontrar al
+   cliente. Ahora se escribe el nombre arriba y la lista se reduce sola; si
+   queda uno solo, se elige solo. Busca también por RPU y por teléfono. */
+function campoCliente(idSel, elegido = "", etiqueta = "Cliente") {
+  return `
+    <label class="f"><span>${etiqueta}</span>
+      <div class="selcli">
+        <input class="qcli" id="${idSel}Q" type="search" autocomplete="off" inputmode="search"
+               placeholder="Escribe el nombre, RPU o teléfono">
+        <span class="cuenta" id="${idSel}Cuenta"></span>
+        <select id="${idSel}" data-sel="${esc(elegido)}"></select>
+      </div>
+    </label>`;
+}
+
+function pintarOpcionesCliente(idSel) {
+  const sel = $("#" + idSel);
+  if (!sel) return;
+  const caja = $("#" + idSel + "Q");
+  const q = paraBuscar(caja ? caja.value : "").trim();
+  const solo = (v) => String(v || "").replace(/[^0-9a-zA-Z]/g, "").toLowerCase();
+  const qn = solo(q);
+  const antes = sel.value || sel.dataset.sel || "";
+
+  const lista = !q ? S.clientes : S.clientes.filter((c) =>
+    paraBuscar([c.nombre, c.contacto, c.telefono, c.referencia].filter(Boolean).join(" ")).includes(q) ||
+    (qn.length >= 3 && (solo(c.referencia).includes(qn) || solo(c.telefono).includes(qn))));
+
+  /* el cliente ya elegido nunca se pierde, aunque no coincida con lo escrito */
+  const yaEsta = lista.some((c) => String(c.id) === String(antes));
+  const mostrar = (antes && !yaEsta)
+    ? [S.clientes.find((c) => String(c.id) === String(antes)), ...lista].filter(Boolean)
+    : lista;
+
+  sel.innerHTML = `<option value="">— Selecciona —</option>` +
+    mostrar.map((c) => `<option value="${c.id}">${esc(c.nombre)}</option>`).join("");
+
+  /* si la búsqueda dejó un solo cliente, ya no hay que elegirlo a mano */
+  const nuevo = (q && lista.length === 1) ? String(lista[0].id) : String(antes || "");
+  sel.value = nuevo;
+  sel.dataset.sel = sel.value;
+  if (String(antes) !== sel.value) sel.dispatchEvent(new Event("change", { bubbles: true }));
+
+  const cuenta = $("#" + idSel + "Cuenta");
+  if (cuenta) cuenta.textContent = q ? `${lista.length} de ${S.clientes.length}` : "";
+}
+
+function refrescarSelectoresCliente(idNuevo = null) {
+  ["edCliente", "rpCliente", "rcCliente"].forEach((idSel) => {
+    const sel = $("#" + idSel);
+    if (!sel) return;
+    if (idNuevo) sel.dataset.sel = String(idNuevo);
+    const caja = $("#" + idSel + "Q");
+    if (caja) caja.value = "";
+    pintarOpcionesCliente(idSel);
+  });
+}
+
+function activarBuscadorCliente(idSel) {
+  pintarOpcionesCliente(idSel);
+  const caja = $("#" + idSel + "Q");
+  if (caja) {
+    const pintar = () => pintarOpcionesCliente(idSel);
+    caja.addEventListener("input", pintar);
+    caja.addEventListener("search", pintar);
+  }
+  const sel = $("#" + idSel);
+  if (sel) sel.addEventListener("change", () => { sel.dataset.sel = sel.value; });
+}
+
 /* ---------------- clientes ---------------- */
-function verClientes() {
+
+/* Las cotizaciones se piden una sola vez; después ya están en memoria y la
+   ficha del cliente las muestra al instante, sin volver a consultar. */
+async function asegurarCotizaciones() {
+  if (S.cotCargadas) return;
+  if (S.pidiendoCot) return S.pidiendoCot;
+  S.pidiendoCot = (async () => {
+    try {
+      S.cotizaciones = (await api("cotizaciones")).cotizaciones || [];
+      S.cotCargadas = true;
+    } catch { /* sin señal: la ficha simplemente no muestra el conteo */ }
+    S.pidiendoCot = null;
+  })();
+  return S.pidiendoCot;
+}
+
+/* Las cotizaciones de un cliente, de la más nueva a la más vieja. */
+function cotizacionesDe(clienteId) {
+  return S.cotizaciones
+    .filter((c) => String(c.cliente_id) === String(clienteId))
+    .sort((a, b) => new Date(b.creado_en) - new Date(a.creado_en));
+}
+
+async function verClientes() {
+  pintarClientes();
+  await asegurarCotizaciones();
+  pintarClientes();
+}
+
+function pintarClientes() {
   if (!S.clientes.length) {
     $("#listaCli").innerHTML = '<div class="vacio">Sin clientes todavía.<br>Toca <b>+</b> para agregar el primero.</div>';
     if ($("#qCliCuenta")) $("#qCliCuenta").textContent = "";
@@ -2021,20 +2127,31 @@ function verClientes() {
   $("#listaCli").innerHTML = !lista.length
     ? `<div class="sin-resultados">Ningún cliente coincide con <b>${esc($("#qCli").value)}</b>.<br>
          Se busca por nombre, número de servicio (RPU), teléfono y correo.</div>`
-    : lista.map((c) => `
+    : lista.map((c) => {
+        const n = S.cotCargadas ? cotizacionesDe(c.id).length : null;
+        return `
       <div class="item" onclick='formCliente(${c.id})'>
         <div class="m"><b>${esc(c.nombre)}</b>
         <span>${esc(c.telefono || c.correo || c.direccion || "Sin datos de contacto")}</span>
         ${c.referencia ? `<span>RPU ${esc(c.referencia)}</span>` : ""}</div>
-        <div class="r" style="color:var(--slate);font-size:19px">›</div>
-      </div>`).join("");
+        <div class="r">
+          ${n ? `<span class="badge b-enviada">${n} ${n === 1 ? "cotización" : "cotizaciones"}</span>` : ""}
+          <span style="color:var(--slate);font-size:19px">›</span>
+        </div>
+      </div>`;
+      }).join("");
 }
 
 function formCliente(id = null) {
-  const c = id ? S.clientes.find((x) => x.id === id) || {} : {};
+  /* Si llega un evento de clic en vez de un id (le pasaba al botón +), se
+     trata como cliente nuevo: si no, se mandaba una actualización de un
+     cliente inexistente y el servidor contestaba «Cliente no encontrado». */
+  if (id !== null && typeof id !== "number" && typeof id !== "string") id = null;
+  const c = id ? S.clientes.find((x) => String(x.id) === String(id)) || {} : {};
   const campo = (k, etq, tipo = "text") =>
     `<label class="f"><span>${etq}</span><input name="${k}" type="${tipo}" value="${esc(c[k] || "")}"></label>`;
   abrirModal(id ? "Editar cliente" : "Nuevo cliente", `
+    ${id ? `<div class="cotcli arriba" id="cotCli"><div class="cargando">Cargando cotizaciones…</div></div>` : ""}
     <form id="fCli">
       <label class="f"><span>Nombre o razón social *</span><input name="nombre" required value="${esc(c.nombre || "")}"></label>
       ${campo("contacto", "Persona de contacto")}
@@ -2045,18 +2162,23 @@ function formCliente(id = null) {
       <label class="f"><span>Notas</span><textarea name="notas">${esc(c.notas || "")}</textarea></label>
       <button class="btn pri full" type="submit">Guardar</button>
     </form>`);
+  if (id) pintarCotizacionesDeCliente(id);
   $("#fCli").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const d = Object.fromEntries(new FormData(ev.target));
     const boton = ev.target.querySelector("button[type=submit]");
     await conBoton(boton, async () => {
       try {
+        let creado = null;
         if (id) await api("clientes", { method: "PATCH", body: { id, ...d } });
-        else await api("clientes", { method: "POST", body: d });
+        else creado = await api("clientes", { method: "POST", body: d });
         await cargarClientes();
         cerrarModal();
         if (vistaActual === "cli") verClientes();
-        if (S.editor && $("#edCliente")) editor();
+        /* Si se estaba capturando una cotización, el cliente recién dado de
+           alta aparece ya elegido, sin volver a dibujar la pantalla (así no
+           se pierde lo que el vendedor llevaba escrito). */
+        refrescarSelectoresCliente(creado && creado.cliente ? creado.cliente.id : null);
       } catch (x) {
         /* Si el servidor avisa que el cliente ya existe, se ofrece abrirlo en
            lugar de crear otro. Es la causa de los clientes repetidos. */
@@ -2079,6 +2201,152 @@ function formCliente(id = null) {
       }
     });
   });
+}
+
+/* Dentro de la ficha del cliente: todas sus cotizaciones, de la más nueva a
+   la más vieja, con su importe y su estatus. Un toque abre cualquiera. */
+async function pintarCotizacionesDeCliente(clienteId) {
+  const caja = $("#cotCli");
+  if (!caja) return;
+  await asegurarCotizaciones();
+  if (!$("#cotCli")) return;          // cerró la ficha mientras cargaba
+
+  const lista = cotizacionesDe(clienteId);
+  const ganado = lista.filter((c) => c.estatus === "ganada")
+                      .reduce((s, c) => s + Number(c.total || 0), 0);
+  const total = lista.reduce((s, c) => s + Number(c.total || 0), 0);
+
+  const resumen = !lista.length ? "" :
+    `<div class="resumen">${lista.length} ${lista.length === 1 ? "cotización" : "cotizaciones"}
+       · ${money(total)} cotizado${ganado > 0 ? ` · ${money(ganado)} ganado` : ""}</div>`;
+
+  const filas = !lista.length
+    ? `<div class="vacio" style="padding:14px 0">Este cliente todavía no tiene cotizaciones.</div>`
+    : lista.map((c) => `
+      <div class="item" onclick="abrirDesdeCliente(${c.id})">
+        <div class="m"><b>${esc(c.folio)}</b>
+          <span>${fecha(c.creado_en)} · ${LINEAS[c.linea] || ""}${c.tipo === "rapida" ? " · rápida" : ""}${esDueno() && c.vendedor ? " · " + esc(c.vendedor) : ""}</span>
+        </div>
+        <div class="r"><b>${money(c.total)}</b>
+          <span class="badge b-${c.estatus}">${ESTATUS[c.estatus] || c.estatus}</span>
+        </div>
+      </div>`).join("");
+
+  $("#cotCli").innerHTML = `
+    <h4>Cotizaciones de este cliente</h4>
+    ${resumen}
+    ${filas}
+    <button class="btn sec full" type="button" style="margin-top:10px"
+            onclick="nuevaParaCliente(${clienteId})">+ Nueva cotización para este cliente</button>`;
+}
+
+/* Abre una cotización desde la ficha del cliente: cierra la ficha primero. */
+function abrirDesdeCliente(id) {
+  cerrarModal();
+  abrirCotizacion(id);
+}
+
+/* Empieza una cotización con este cliente ya elegido. */
+function nuevaParaCliente(clienteId) {
+  cerrarModal();
+  S.editor = {
+    id: null, folio: "(nueva)", cliente_id: String(clienteId), estatus: "borrador",
+    tecnico: {}, partidas: [], ahorro: {}, comentarios: "",
+  };
+  editor();
+}
+
+/* ---------------- clientes repetidos (solo administrador) ----------------
+   Se listan agrupados. El administrador marca cuál se queda y al unir, las
+   cotizaciones y los movimientos de los otros se le pasan a ése antes de
+   borrarlos: no se pierde trabajo. */
+async function verDuplicados() {
+  abrirModal("Clientes repetidos", '<div class="cargando">Buscando repetidos…</div>');
+  try {
+    const { grupos, total } = await api("clientes/duplicados");
+    S.duplicados = grupos;
+    pintarDuplicados(total);
+  } catch (e) {
+    $("#modalCuerpo").innerHTML = `<div class="vacio">${esc(e.message)}</div>`;
+  }
+}
+
+function pintarDuplicados(total) {
+  const grupos = S.duplicados || [];
+  if (!grupos.length) {
+    $("#modalCuerpo").innerHTML = `
+      <div class="vacio">No hay clientes repetidos.<br>
+        Los ${total} clientes del directorio están cada uno una sola vez.</div>`;
+    return;
+  }
+  const cuantos = grupos.reduce((n, g) => n + g.clientes.length - 1, 0);
+  $("#modalCuerpo").innerHTML = `
+    <p style="font-size:13px;color:var(--slate);margin-bottom:14px">
+      ${grupos.length} ${grupos.length === 1 ? "grupo repetido" : "grupos repetidos"}
+      · ${cuantos} ${cuantos === 1 ? "registro de más" : "registros de más"}.
+      En cada grupo, marca el que se queda y toca <b>Unir</b>. Las cotizaciones de los otros
+      pasan al que elijas y los datos vacíos se completan entre ellos.</p>
+    ${grupos.map((g, i) => tarjetaDuplicado(g, i)).join("")}`;
+}
+
+function tarjetaDuplicado(g, i) {
+  const filas = g.clientes.map((c, j) => `
+    <label class="dupfila">
+      <input type="radio" name="dup${i}" value="${c.id}" ${j === 0 ? "checked" : ""}>
+      <span class="dupdatos">
+        <b>${esc(c.nombre)}</b>
+        <span>${[c.telefono, c.correo, c.direccion].filter(Boolean).map(esc).join(" · ") || "Sin datos de contacto"}</span>
+        ${c.referencia ? `<span>RPU ${esc(c.referencia)}</span>` : ""}
+        <span>Alta ${fecha(c.creado_en)}${c.creador ? " · " + esc(c.creador) : ""}</span>
+      </span>
+      <span class="dupcuenta">
+        <b>${c.cotizaciones}</b>
+        <span>${c.cotizaciones === 1 ? "cotización" : "cotizaciones"}</span>
+      </span>
+    </label>`).join("");
+
+  return `
+    <div class="dupgrupo" id="dup${i}">
+      <div class="dupmotivo">${g.motivo === "nombre"
+        ? "Mismo nombre escrito de distinta forma"
+        : "Distinto nombre, pero el mismo número de servicio"}</div>
+      ${filas}
+      <div class="acciones" style="margin-top:10px">
+        <button class="btn pri sm" onclick="unirDuplicados(${i}, this)">Unir en el marcado</button>
+      </div>
+    </div>`;
+}
+
+async function unirDuplicados(i, boton) {
+  const g = (S.duplicados || [])[i];
+  if (!g) return;
+  const marcado = document.querySelector(`input[name="dup${i}"]:checked`);
+  if (!marcado) return aviso("#modalError", "Marca cuál cliente se queda.");
+  const conservar = Number(marcado.value);
+  const quitar = g.clientes.map((c) => c.id).filter((id) => id !== conservar);
+  const sequeda = g.clientes.find((c) => c.id === conservar);
+  const mueven = g.clientes.filter((c) => c.id !== conservar)
+                           .reduce((n, c) => n + c.cotizaciones, 0);
+
+  const aviso1 = `Se queda «${sequeda.nombre}».\n\n` +
+    (mueven ? `Se le pasan ${mueven} ${mueven === 1 ? "cotización" : "cotizaciones"} y ` : "") +
+    `se borran ${quitar.length} ${quitar.length === 1 ? "registro repetido" : "registros repetidos"}.\n\n` +
+    `Esto no se puede deshacer. ¿Continuamos?`;
+  if (!confirm(aviso1)) return;
+
+  await conBoton(boton, async () => {
+    try {
+      const r = await api("clientes/fusionar", { method: "POST", body: { conservar, quitar } });
+      await cargarClientes();
+      S.cotCargadas = false;
+      S.duplicados = (S.duplicados || []).filter((_, k) => k !== i);
+      pintarDuplicados();
+      aviso("#modalError", `Listo: ${r.movidas} ${r.movidas === 1 ? "cotización quedó" : "cotizaciones quedaron"} ` +
+        `a nombre de ${r.cliente.nombre} y se borraron ${r.borrados} ` +
+        `${r.borrados === 1 ? "registro repetido" : "registros repetidos"}.`, "ok");
+      if (vistaActual === "cli") verClientes();
+    } catch (e) { aviso("#modalError", e.message); }
+  }, "Uniendo…");
 }
 
 /* ---------------- inventario ---------------- */
@@ -2190,6 +2458,13 @@ function verMas() {
       <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
         Da de alta al equipo y controla quién tiene acceso.</p>
       <button class="btn pri sm" onclick="verUsuarios()">Administrar vendedores</button>
+    </div>
+    <div class="card">
+      <h3>Clientes repetidos</h3>
+      <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
+        Los que se dieron de alta dos o tres veces antes de que la app avisara. Aquí los ves
+        juntos, eliges cuál se queda y a ése se le pasan todas las cotizaciones de los otros.</p>
+      <button class="btn pri sm" onclick="verDuplicados()">Revisar repetidos</button>
     </div>` : ""}
     <div class="card">
       <h3>Datos de ejemplo</h3>
@@ -2487,7 +2762,7 @@ function cerrarModal() { $("#modal").hidden = true; }
 ["qCot", "qCli"].forEach((id) => {
   const caja = $("#" + id);
   if (!caja) return;
-  const pintar = id === "qCot" ? () => pintarCotizaciones() : () => verClientes();
+  const pintar = id === "qCot" ? () => pintarCotizaciones() : () => pintarClientes();
   caja.addEventListener("input", pintar);
   caja.addEventListener("search", pintar);   // la "x" del campo de búsqueda
 });
@@ -2501,6 +2776,7 @@ Object.assign(window, {
   formPassword, verCatalogo, formConcepto, verUsuarios, formUsuario, cerrarModal,
   formRapido, verSeguimiento, datosEjemplo, formCorreo, eliminarUsuario, confirmarEliminar,
   buscarActualizacion, formTarifas,
+  abrirDesdeCliente, nuevaParaCliente, verDuplicados, unirDuplicados,
 });
 
 /* ---------------- service worker ---------------- */
