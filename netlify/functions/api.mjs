@@ -8,6 +8,47 @@ import {
    con el mismo número de servicio. La comparación se hace en la aplicación y no
    en la consulta, porque la lista de clientes es chica y así se aprovecha la
    misma normalización que usa el buscador. */
+/* ¿Este sitio es el de demostración?
+   Se enciende con la variable MODO_DEMO = 1 en la configuración de Netlify,
+   NO en el código ni en la base de datos. Así el mismo código sirve para el
+   sitio de trabajo de Marcelestial y para el de demostración, y el sitio de
+   trabajo no puede volverse demostración por accidente. */
+const esDemostracion = () => String(process.env.MODO_DEMO || "") === "1";
+
+/* Texto listo para comparar: sin acentos y en minúsculas, igual que hace la
+   app en el teléfono, para que buscar «plasticos» encuentre «PLÁSTICOS». */
+const sinAcentos = (v) => String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+const soloAlfaNum = (v) => String(v || "").replace(/[^0-9a-zA-Z]/g, "").toLowerCase();
+
+/* Precios del sitio de demostración. Deliberadamente distintos de los de
+   Marcelestial: cifras redondas de referencia del mercado. Nunca copiar aquí
+   la tabla real de nadie. */
+const CATALOGO_DEMO = {
+  "001": 85, "002": 55, "ABZ-INT": 38, "ABZ-FIN": 42, "PER-T8": 12,
+  "EPDM": 9, "TOR-25": 6, "TOR-75": 11,
+  PANEL: 4200, INVERSOR: 32000, ESTRUCT: 45000, MATELEC: 38000,
+  MANOBRA: 60000, GESTCFE: 18000, LIMPIEZA: 3500, MANTTO: 6500,
+};
+
+const TARIFAS_DEMO = [
+  { clave: "GDMTH", nombre: "GDMTH · Gran demanda en media tensión horaria",
+    grupo: "media", horaria: true, uvie: true, gestion: true, tensiones: ["220", "440"],
+    escalones: [
+      { tension: "220", hasta: 99, precio: 14000 }, { tension: "220", hasta: 1000, precio: 13500 },
+      { tension: "440", hasta: 99, precio: 13500 }, { tension: "440", hasta: 1000, precio: 13000 }] },
+  { clave: "GDMTO", nombre: "GDMTO · Gran demanda en media tensión ordinaria",
+    grupo: "media", horaria: false, uvie: true, gestion: true, tensiones: ["220", "440"],
+    escalones: [
+      { tension: "220", hasta: 99, precio: 14000 }, { tension: "220", hasta: 1000, precio: 13500 },
+      { tension: "440", hasta: 99, precio: 13500 }, { tension: "440", hasta: 1000, precio: 13000 }] },
+  { clave: "01", nombre: "Tarifa 01 · Casa",
+    grupo: "domestica", horaria: false, uvie: false, gestion: false, tensiones: ["127", "220"],
+    escalones: [{ tension: "*", hasta: 99999, precio: 15000 }] },
+  { clave: "02", nombre: "Tarifa 02 · Negocio",
+    grupo: "domestica", horaria: false, uvie: false, gestion: false, tensiones: ["127", "220"],
+    escalones: [{ tension: "*", hasta: 99999, precio: 15000 }] },
+];
+
 async function clienteRepetido(nombre, referencia, excluirId = 0) {
   const clave = claveNombre(nombre);
   const rpu = claveRpu(referencia);
@@ -33,7 +74,7 @@ export default async (req) => {
     /* ============ ARRANQUE / SESIÓN ============ */
     if (ruta === "estado" && metodo === "GET") {
       const [r] = await db.sql`SELECT COUNT(*)::int AS n FROM usuarios`;
-      return json({ instalado: (r?.n || 0) > 0 });
+      return json({ instalado: (r?.n || 0) > 0, demo: esDemostracion() });
     }
 
     if (ruta === "setup" && metodo === "POST") {
@@ -282,11 +323,23 @@ export default async (req) => {
     /* ============ CLIENTES ============ */
     if (ruta === "clientes") {
       if (metodo === "GET") {
+        /* El conteo de cotizaciones lo cuenta la base de datos. Antes se
+           deducía de la lista ya descargada, que viene recortada, y un cliente
+           con 40 cotizaciones podía aparecer con 0. */
         const filas = esDueno(yo)
-          ? await db.sql`SELECT c.*, u.nombre AS creador FROM clientes c
-                         LEFT JOIN usuarios u ON u.id = c.creado_por ORDER BY c.nombre`
-          : await db.sql`SELECT c.*, NULL AS creador FROM clientes c
-                         WHERE c.creado_por = ${yo.id} ORDER BY c.nombre`;
+          ? await db.sql`
+              SELECT c.*, u.nombre AS creador,
+                     (SELECT COUNT(*)::int FROM cotizaciones q WHERE q.cliente_id = c.id) AS cotizaciones
+              FROM clientes c
+              LEFT JOIN usuarios u ON u.id = c.creado_por
+              ORDER BY c.nombre`
+          : await db.sql`
+              SELECT c.*, NULL AS creador,
+                     (SELECT COUNT(*)::int FROM cotizaciones q
+                       WHERE q.cliente_id = c.id AND q.vendedor_id = ${yo.id}) AS cotizaciones
+              FROM clientes c
+              WHERE c.creado_por = ${yo.id}
+              ORDER BY c.nombre`;
         return json({ clientes: filas });
       }
       if (metodo === "POST") {
@@ -467,24 +520,65 @@ export default async (req) => {
     /* ============ COTIZACIONES ============ */
     if (ruta === "cotizaciones") {
       if (metodo === "GET") {
+        /* La búsqueda se hace aquí, en la base de datos, no en el teléfono:
+           antes el buscador sólo miraba las 300 cotizaciones ya descargadas y
+           las más viejas eran invisibles. */
+        const busca = sinAcentos(url.searchParams.get("q") || "");
+        const idCliente = num(url.searchParams.get("cliente"));
+        const tope = Math.min(Math.max(num(url.searchParams.get("tope")) || 300, 1), 500);
+        const like = "%" + busca + "%";
+        const buscaNum = soloAlfaNum(busca);
+        const likeNum = "%" + buscaNum + "%";
+
         const filas = esDueno(yo)
           ? await db.sql`
               SELECT c.id, c.folio, c.estatus, c.total, c.linea, c.tipo, c.creado_en, c.actualizado_en,
                      c.cliente_id, cl.nombre AS cliente, cl.referencia AS cliente_rpu,
-                     c.recibo->>'no_servicio' AS recibo_rpu, u.nombre AS vendedor
+                     c.recibo->>'no_servicio' AS recibo_rpu, u.nombre AS vendedor,
+                     COUNT(*) OVER()::int AS encontradas
               FROM cotizaciones c
               LEFT JOIN clientes cl ON cl.id = c.cliente_id
               LEFT JOIN usuarios u ON u.id = c.vendedor_id
-              ORDER BY c.creado_en DESC LIMIT 300`
+              WHERE (${idCliente} = 0 OR c.cliente_id = ${idCliente})
+                AND (${busca} = ''
+                  OR lower(translate(coalesce(cl.nombre,''),'ÁÉÍÓÚÜÑáéíóúüñ','AEIOUUNaeiouun')) LIKE ${like}
+                  OR lower(c.folio) LIKE ${like}
+                  OR lower(translate(coalesce(u.nombre,''),'ÁÉÍÓÚÜÑáéíóúüñ','AEIOUUNaeiouun')) LIKE ${like}
+                  OR (length(${buscaNum}) >= 3 AND (
+                        lower(regexp_replace(coalesce(cl.referencia,''),'[^0-9A-Za-z]','','g')) LIKE ${likeNum}
+                     OR lower(regexp_replace(coalesce(c.recibo->>'no_servicio',''),'[^0-9A-Za-z]','','g')) LIKE ${likeNum}
+                     OR lower(regexp_replace(c.folio,'[^0-9A-Za-z]','','g')) LIKE ${likeNum})))
+              ORDER BY c.creado_en DESC LIMIT ${tope}`
           : await db.sql`
               SELECT c.id, c.folio, c.estatus, c.total, c.linea, c.tipo, c.creado_en, c.actualizado_en,
                      c.cliente_id, cl.nombre AS cliente, cl.referencia AS cliente_rpu,
-                     c.recibo->>'no_servicio' AS recibo_rpu
+                     c.recibo->>'no_servicio' AS recibo_rpu, NULL AS vendedor,
+                     COUNT(*) OVER()::int AS encontradas
               FROM cotizaciones c
               LEFT JOIN clientes cl ON cl.id = c.cliente_id
+              LEFT JOIN usuarios u ON u.id = c.vendedor_id
               WHERE c.vendedor_id = ${yo.id}
-              ORDER BY c.creado_en DESC LIMIT 300`;
-        return json({ cotizaciones: filas.map((f) => ({ ...f, vendedor: f.vendedor ?? yo.nombre })) });
+                AND (${idCliente} = 0 OR c.cliente_id = ${idCliente})
+                AND (${busca} = ''
+                  OR lower(translate(coalesce(cl.nombre,''),'ÁÉÍÓÚÜÑáéíóúüñ','AEIOUUNaeiouun')) LIKE ${like}
+                  OR lower(c.folio) LIKE ${like}
+                  OR lower(translate(coalesce(u.nombre,''),'ÁÉÍÓÚÜÑáéíóúüñ','AEIOUUNaeiouun')) LIKE ${like}
+                  OR (length(${buscaNum}) >= 3 AND (
+                        lower(regexp_replace(coalesce(cl.referencia,''),'[^0-9A-Za-z]','','g')) LIKE ${likeNum}
+                     OR lower(regexp_replace(coalesce(c.recibo->>'no_servicio',''),'[^0-9A-Za-z]','','g')) LIKE ${likeNum}
+                     OR lower(regexp_replace(c.folio,'[^0-9A-Za-z]','','g')) LIKE ${likeNum})))
+              ORDER BY c.creado_en DESC LIMIT ${tope}`;
+
+        /* «encontradas» es cuántas cumplen la búsqueda en TODA la base, no
+           cuántas cabían en el tope. Sin ese dato, el contador de la pantalla
+           mentía: decía «5 de 300» cuando en realidad había 350. */
+        const encontradas = filas.length ? Number(filas[0].encontradas) : 0;
+        return json({
+          cotizaciones: filas.map(({ encontradas: _, ...f }) => ({ ...f, vendedor: f.vendedor ?? yo.nombre })),
+          encontradas,
+          tope,
+          recortada: encontradas > filas.length,
+        });
       }
       if (metodo === "POST") {
         const partidas = Array.isArray(cuerpo.partidas) ? cuerpo.partidas : [];
@@ -566,6 +660,41 @@ export default async (req) => {
         await db.sql`DELETE FROM movimientos  WHERE demo`;
         await db.sql`DELETE FROM clientes     WHERE demo`;
         return json({ ok: true, mensaje: "Datos de ejemplo eliminados." });
+      }
+
+      /* ---------- Reiniciar la demostración ----------
+         Deja el sitio como recién instalado: borra TODO lo capturado —no sólo
+         lo marcado como ejemplo— y devuelve los precios a los de demostración.
+         Tres candados, porque este botón borra de verdad:
+           1. sólo si MODO_DEMO = 1 (el sitio de trabajo nunca lo tiene),
+           2. sólo el administrador,
+           3. hay que mandar la palabra REINICIAR.
+         El primero es el que importa: sin él, ni siquiera existe la ruta. */
+      if (cuerpo.accion === "reiniciar") {
+        if (!esDemostracion())
+          return err("Este botón sólo existe en el sitio de demostración.", 403);
+        if (String(cuerpo.confirmar || "") !== "REINICIAR")
+          return err("Falta la confirmación.", 400);
+
+        await db.sql`DELETE FROM cotizaciones`;
+        await db.sql`DELETE FROM movimientos`;
+        await db.sql`DELETE FROM clientes`;
+        await db.sql`DELETE FROM seguimiento`;
+
+        /* Precios de demostración: NO son los de Marcelestial.
+           Son cifras redondas y verosímiles, para que un instalador que ve la
+           demostración no se lleve la estructura de márgenes de nadie. */
+        await db.sql`
+          UPDATE config
+             SET valor = jsonb_set(valor, '{lista}', ${JSON.stringify(TARIFAS_DEMO)}::jsonb)
+           WHERE clave = 'tarifas'`;
+        /* Precios de catálogo de demostración: sin ellos, la cotización por
+           catálogo sale en ceros y la demostración se ve rota. También son
+           cifras de referencia, no las de nadie. */
+        for (const [clave, precio] of Object.entries(CATALOGO_DEMO))
+          await db.sql`UPDATE catalogo SET precio = ${precio} WHERE clave = ${clave}`;
+
+        cuerpo.accion = "cargar";   /* y en seguida se vuelven a sembrar los ejemplos */
       }
 
       const [ya] = await db.sql`SELECT COUNT(*)::int AS n FROM clientes WHERE demo`;

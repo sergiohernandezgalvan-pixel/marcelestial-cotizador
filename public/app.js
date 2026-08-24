@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.08.24";
+const VERSION = "2026.08.24-3";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -83,11 +83,13 @@ async function arrancar() {
     try {
       const { usuario } = await api("yo");
       S.yo = usuario;
+      api("estado").then((e) => prenderDemo(e.demo)).catch(() => {});
       return entrar();
     } catch { localStorage.removeItem("mc_token"); S.token = null; }
   }
   try {
-    const { instalado } = await api("estado");
+    const { instalado, demo } = await api("estado");
+    prenderDemo(demo);
     if (!instalado) {
       $("#formLogin").hidden = true;
       $("#formSetup").hidden = false;
@@ -155,6 +157,15 @@ function ir(v) {
   if (v === "cli") verClientes();
   if (v === "inv") verInventario();
   if (v === "mas") verMas();
+}
+
+/* El sitio de demostración se marca solo: el servidor avisa si Netlify tiene
+   MODO_DEMO = 1. No se puede encender desde la app. */
+function prenderDemo(esDemo) {
+  S.demo = !!esDemo;
+  document.body.classList.toggle("demo", S.demo);
+  const cinta = $("#cintaDemo");
+  if (cinta) cinta.hidden = !S.demo;
 }
 
 /* ---------------- datos base ---------------- */
@@ -230,7 +241,10 @@ async function verCotizaciones() {
   $("#cotDes").textContent = esDueno() ? "Todas las cotizaciones del equipo" : "Tus propuestas técnico-económicas";
   $("#listaCot").innerHTML = '<div class="cargando">Cargando…</div>';
   try {
-    S.cotizaciones = (await api("cotizaciones")).cotizaciones || [];
+    const lista = await api("cotizaciones");
+    S.cotizaciones = lista.cotizaciones || [];
+    S.cotEncontradas = lista.encontradas ?? S.cotizaciones.length;
+    S.cotRecortada = !!lista.recortada;
     S.cotCargadas = true;
     if (!S.cotizaciones.length) {
       $("#listaCot").innerHTML = `<div class="vacio">Todavía no hay cotizaciones.<br>Toca el botón <b>+</b> para crear la primera.</div>`;
@@ -256,9 +270,20 @@ function pintarCotizaciones() {
   });
 
   const cuenta = $("#qCotCuenta");
-  if (cuenta) cuenta.textContent = q ? `${lista.length} de ${S.cotizaciones.length}` : "";
+  if (cuenta) {
+    if (S.buscando) cuenta.textContent = "buscando…";
+    else if (q) cuenta.textContent = `${lista.length} de ${S.cotEncontradas ?? S.cotizaciones.length}`;
+    else if (S.cotRecortada) cuenta.textContent = `${S.cotizaciones.length} de ${S.cotEncontradas}`;
+    else cuenta.textContent = "";
+  }
 
-  $("#listaCot").innerHTML = !lista.length
+  const aviso = (!q && S.cotRecortada)
+    ? `<div class="nota-tope">Se muestran las ${S.cotizaciones.length} cotizaciones más recientes
+         de ${S.cotEncontradas}. Para ver las anteriores, búscalas por cliente, folio o
+         número de servicio: el buscador revisa todo el historial.</div>`
+    : "";
+
+  $("#listaCot").innerHTML = aviso + (!lista.length
     ? `<div class="sin-resultados">Ninguna cotización coincide con <b>${esc($("#qCot").value)}</b>.<br>
          Se busca por cliente, folio y número de servicio (RPU).</div>`
     : lista.map((c) => {
@@ -275,7 +300,7 @@ function pintarCotizaciones() {
           <span class="badge b-${c.estatus}">${ESTATUS[c.estatus] || c.estatus}</span>
         </div>
       </div>`;
-      }).join("");
+      }).join(""));
 }
 
 function nuevaCotizacion() {
@@ -628,7 +653,8 @@ async function imprimirCotizacion(conRecibo = false) {
     </div>
     ${tablaRecuperacion(c, total)}
     ${hojaProducto(c)}
-    ${hojaMonitoreo()}`;
+    ${hojaMonitoreo()}
+    ${S.demo ? '<div class="pie-demo">Documento generado en el sitio de demostración · cifras y precios ficticios</div>' : ""}`;
   abrirPrevia(c.folio);
 }
 
@@ -2079,31 +2105,7 @@ function activarBuscadorCliente(idSel) {
 
 /* ---------------- clientes ---------------- */
 
-/* Las cotizaciones se piden una sola vez; después ya están en memoria y la
-   ficha del cliente las muestra al instante, sin volver a consultar. */
-async function asegurarCotizaciones() {
-  if (S.cotCargadas) return;
-  if (S.pidiendoCot) return S.pidiendoCot;
-  S.pidiendoCot = (async () => {
-    try {
-      S.cotizaciones = (await api("cotizaciones")).cotizaciones || [];
-      S.cotCargadas = true;
-    } catch { /* sin señal: la ficha simplemente no muestra el conteo */ }
-    S.pidiendoCot = null;
-  })();
-  return S.pidiendoCot;
-}
-
-/* Las cotizaciones de un cliente, de la más nueva a la más vieja. */
-function cotizacionesDe(clienteId) {
-  return S.cotizaciones
-    .filter((c) => String(c.cliente_id) === String(clienteId))
-    .sort((a, b) => new Date(b.creado_en) - new Date(a.creado_en));
-}
-
 async function verClientes() {
-  pintarClientes();
-  await asegurarCotizaciones();
   pintarClientes();
 }
 
@@ -2128,7 +2130,7 @@ function pintarClientes() {
     ? `<div class="sin-resultados">Ningún cliente coincide con <b>${esc($("#qCli").value)}</b>.<br>
          Se busca por nombre, número de servicio (RPU), teléfono y correo.</div>`
     : lista.map((c) => {
-        const n = S.cotCargadas ? cotizacionesDe(c.id).length : null;
+        const n = Number(c.cotizaciones || 0);   /* lo cuenta la base de datos */
         return `
       <div class="item" onclick='formCliente(${c.id})'>
         <div class="m"><b>${esc(c.nombre)}</b>
@@ -2208,10 +2210,19 @@ function formCliente(id = null) {
 async function pintarCotizacionesDeCliente(clienteId) {
   const caja = $("#cotCli");
   if (!caja) return;
-  await asegurarCotizaciones();
-  if (!$("#cotCli")) return;          // cerró la ficha mientras cargaba
 
-  const lista = cotizacionesDe(clienteId);
+  /* Se le preguntan al servidor las de ESTE cliente. Antes se filtraban de la
+     lista general, que viene recortada a las más recientes, y un cliente con
+     40 cotizaciones podía aparecer con 0. */
+  let lista = [];
+  try {
+    const r = await api("cotizaciones?cliente=" + clienteId + "&tope=500");
+    lista = r.cotizaciones || [];
+  } catch (e) {
+    if ($("#cotCli")) $("#cotCli").innerHTML = `<div class="vacio">${esc(e.message)}</div>`;
+    return;
+  }
+  if (!$("#cotCli")) return;          // cerró la ficha mientras cargaba
   const ganado = lista.filter((c) => c.estatus === "ganada")
                       .reduce((s, c) => s + Number(c.total || 0), 0);
   const total = lista.reduce((s, c) => s + Number(c.total || 0), 0);
@@ -2466,6 +2477,16 @@ function verMas() {
         juntos, eliges cuál se queda y a ése se le pasan todas las cotizaciones de los otros.</p>
       <button class="btn pri sm" onclick="verDuplicados()">Revisar repetidos</button>
     </div>` : ""}
+    ${S.demo ? `
+    <div class="card" style="border:2px solid var(--amber)">
+      <h3>Sitio de demostración</h3>
+      <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
+        Éste no es el sitio de trabajo: todo lo que hay aquí es ficticio y los precios son
+        de referencia, no los reales. Cuando la demostración quede sucia de tanto probar,
+        este botón la deja como nueva: <b>borra todo lo capturado</b> y vuelve a sembrar los
+        clientes y las cotizaciones de ejemplo.</p>
+      <button class="btn dan sm" onclick="reiniciarDemo(this)">Reiniciar la demostración</button>
+    </div>` : ""}
     <div class="card">
       <h3>Datos de ejemplo</h3>
       <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
@@ -2686,6 +2707,23 @@ async function verSeguimiento(id) {
   } catch (e) { alert(e.message); }
 }
 
+/* Deja la demostración como recién instalada. El servidor sólo acepta esto si
+   Netlify tiene MODO_DEMO = 1, así que en el sitio de trabajo ni existe. */
+async function reiniciarDemo(boton) {
+  if (!confirm("Se borra TODO lo capturado en este sitio de demostración —clientes, " +
+               "cotizaciones y movimientos— y se vuelven a sembrar los ejemplos.\n\n" +
+               "Esto no afecta al sitio de trabajo de Marcelestial.\n\n¿Continuamos?")) return;
+  await conBoton(boton, async () => {
+    try {
+      const r = await api("demo", { method: "POST", body: { accion: "reiniciar", confirmar: "REINICIAR" } });
+      S.cotCargadas = false;
+      await cargarClientes(); await cargarCatalogo(); await cargarConfig();
+      alert(r.mensaje || "La demostración quedó como nueva.");
+      ir("panel");
+    } catch (e) { alert(e.message); }
+  }, "Reiniciando…");
+}
+
 async function datosEjemplo(accion) {
   if (accion === "borrar" && !confirm("¿Borrar todos los clientes y cotizaciones de ejemplo? Tus datos reales no se tocan."))
     return;
@@ -2757,15 +2795,61 @@ function abrirModal(titulo, html) {
 }
 function cerrarModal() { $("#modal").hidden = true; }
 
-/* Los dos buscadores filtran lo que ya está cargado: no vuelven a consultar al
-   servidor, así que responden al instante aunque la señal esté lenta. */
-["qCot", "qCli"].forEach((id) => {
-  const caja = $("#" + id);
-  if (!caja) return;
-  const pintar = id === "qCot" ? () => pintarCotizaciones() : () => pintarClientes();
-  caja.addEventListener("input", pintar);
-  caja.addEventListener("search", pintar);   // la "x" del campo de búsqueda
-});
+/* El buscador de CLIENTES filtra lo que ya está cargado: la lista de clientes
+   viene completa, así que responde al instante. */
+{
+  const caja = $("#qCli");
+  if (caja) {
+    caja.addEventListener("input", () => pintarClientes());
+    caja.addEventListener("search", () => pintarClientes());
+  }
+}
+
+/* El buscador de COTIZACIONES trabaja en dos tiempos:
+   1. filtra al instante lo que ya está en el teléfono, para que se sienta vivo;
+   2. medio segundo después le pregunta al servidor, que sí revisa TODO el
+      historial —incluidas las viejas que no cabían en la lista descargada—.
+   Las respuestas viejas se descartan: si el vendedor siguió escribiendo, sólo
+   vale la última búsqueda. */
+{
+  const caja = $("#qCot");
+  if (caja) {
+    let reloj = null, turno = 0;
+
+    const preguntarAlServidor = async () => {
+      const q = caja.value.trim();
+      const mio = ++turno;
+      if (q.length < 2) {                 // con una letra no vale la pena
+        S.buscando = false;
+        if (!q && !S.cotCargadas) { await verCotizaciones(); return; }
+        pintarCotizaciones();
+        return;
+      }
+      S.buscando = true;
+      pintarCotizaciones();
+      try {
+        const r = await api("cotizaciones?q=" + encodeURIComponent(q));
+        if (mio !== turno) return;        // llegó tarde: ya se escribió otra cosa
+        S.cotizaciones = r.cotizaciones || [];
+        S.cotEncontradas = r.encontradas ?? S.cotizaciones.length;
+        S.cotRecortada = !!r.recortada;
+        S.cotCargadas = false;            // la lista en memoria ya no es la general
+      } catch { /* sin señal: se queda con lo que ya filtró en el teléfono */ }
+      if (mio !== turno) return;
+      S.buscando = false;
+      pintarCotizaciones();
+    };
+
+    const alEscribir = () => {
+      pintarCotizaciones();               // respuesta inmediata con lo que hay
+      clearTimeout(reloj);
+      reloj = setTimeout(preguntarAlServidor, 450);
+      if (!caja.value.trim()) { clearTimeout(reloj); preguntarAlServidor(); }
+    };
+    caja.addEventListener("input", alEscribir);
+    caja.addEventListener("search", alEscribir);
+  }
+}
 $("#modal").addEventListener("click", (e) => { if (e.target.id === "modal") cerrarModal(); });
 
 /* ---------------- exponer al HTML ---------------- */
@@ -2777,6 +2861,7 @@ Object.assign(window, {
   formRapido, verSeguimiento, datosEjemplo, formCorreo, eliminarUsuario, confirmarEliminar,
   buscarActualizacion, formTarifas,
   abrirDesdeCliente, nuevaParaCliente, verDuplicados, unirDuplicados,
+  reiniciarDemo,
 });
 
 /* ---------------- service worker ---------------- */
