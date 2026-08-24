@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.08.20-3";
+const VERSION = "2026.08.21-2";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -368,9 +368,9 @@ function editor() {
     </div>
 
     <div class="card">
-      <h3>Foto del producto</h3>
+      <h3>Foto del equipo</h3>
       <p style="font-size:11.5px;color:var(--slate);margin-bottom:12px">
-        La que se imprime al final de la propuesta. Se elige del carrete.</p>
+        La que se imprime en la hoja del final. Se elige del carrete.</p>
       <div class="foto-caja">
         <div id="edProdPrev"></div>
         <div style="flex:1">
@@ -538,6 +538,7 @@ async function imprimirCotizacion(conRecibo = false) {
   const campo = (k, v) => v ? `<div><span>${k}</span><b>${esc(v)}</b></div>` : "";
 
   $("#doc").innerHTML = `
+    ${hojaPortada(c)}
     <div class="hoja">
       <div class="dh">
         <div>
@@ -623,7 +624,8 @@ async function imprimirCotizacion(conRecibo = false) {
       </div>
     </div>
     ${tablaRecuperacion(c, total)}
-    ${hojaProducto(c)}`;
+    ${hojaProducto(c)}
+    ${hojaMonitoreo()}`;
   abrirPrevia(c.folio);
 }
 
@@ -644,9 +646,11 @@ function abrirPrevia(folio) {
    el texto: así lo que ve el vendedor es lo que va a salir impreso. */
 function ajustarPrevia() {
   const doc = $("#doc");
-  const ANCHO = 672;                                  // 7 pulgadas a 96 puntos
-  const z = Math.min(1, (doc.clientWidth - 20) / ANCHO);
+  const disponible = doc.clientWidth - 20;
   doc.querySelectorAll(".hoja").forEach((hoja) => {
+    /* la propuesta mide 7 pulgadas de ancho; la portada, la hoja de papel
+       completa: 8.5 pulgadas. Cada una se encoge con su propia proporción. */
+    const ancho = hoja.classList.contains("portada") ? 816 : 672;
     let caja = hoja.parentElement;
     if (!caja.classList.contains("hoja-caja")) {      // se envuelve una sola vez
       caja = document.createElement("div");
@@ -654,11 +658,12 @@ function ajustarPrevia() {
       hoja.parentNode.insertBefore(caja, hoja);
       caja.appendChild(hoja);
     }
-    hoja.style.width = ANCHO + "px";
+    const z = Math.min(1, disponible / ancho);
+    hoja.style.width = ancho + "px";
     hoja.style.transform = z < 1 ? `scale(${z})` : "";
     /* el alto real de la hoja sin encoger, para que la caja ocupe lo justo */
     caja.style.height = Math.ceil(hoja.offsetHeight * z) + "px";
-    caja.style.width = Math.ceil(ANCHO * z) + "px";
+    caja.style.width = Math.ceil(ancho * z) + "px";
   });
 }
 
@@ -680,8 +685,68 @@ window.addEventListener("popstate", () => {
   if (document.body.classList.contains("previa")) cerrarPrevia();
 });
 
-/* Hoja de anexo: la foto que el vendedor eligió de su carrete. Sólo aparece si
-   hay foto; sin ella la propuesta sale igual, en dos hojas. */
+/* ---------- Portada de la propuesta ----------
+   Es fija: la misma para todas las cotizaciones. Sólo cambian los datos del
+   cliente de la caja azul, que la app llena con lo que ya tiene guardado. */
+function hojaPortada(c) {
+  const r = c.recibo || {};
+  const rpu = c.cliente_referencia || r.no_servicio || "";
+  const f = c.creado_en ? new Date(c.creado_en) : new Date();
+  const MES = ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO",
+               "JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"];
+  const renglon = (etq, val) => val
+    ? `<div><span class="lab">${etq}</span><span class="val">${esc(val)}</span></div>` : "";
+
+  return `
+    <div class="hoja portada">
+      <div class="arriba">
+        <img class="marca" src="/icons/logo.png" alt="Marcelestial">
+        <h1>SISTEMA DE AUTOGENERACIÓN<br>DE ENERGÍA FOTOVOLTAICA SOLAR</h1>
+        <div class="sub">Propuesta técnica-económica</div>
+        <img class="banda" src="/img/portada.jpg" alt="Sistema fotovoltaico instalado en cubierta">
+
+        <div class="mv">
+          <div>
+            <div class="et">Misión</div>
+            <div class="tit">Energía bien administrada</div>
+            <p>Ser una solución integral, en México y el mundo, para la administración eficiente de
+            la energía: integramos tecnología fotovoltaica, eólica y sistemas avanzados de
+            almacenamiento para generar ahorros sostenibles, optimizar el uso de los recursos
+            energéticos de nuestros clientes y contribuir activamente al cuidado del medio ambiente,
+            impulsando el desarrollo de una sociedad más próspera, responsable y sustentable.</p>
+          </div>
+          <div>
+            <div class="et">Visión</div>
+            <div class="tit">Transformar el consumo de energía</div>
+            <p>Transformar la manera en que las personas, empresas e industrias consumen energía,
+            con estrategias innovadoras que permitan un rápido retorno de inversión y la creación de
+            activos energéticos perdurables. A través de modelos de ahorro compartido y soluciones
+            tecnológicas de última generación, brindamos beneficios económicos inmediatos con una
+            inversión accesible, generando valor sostenible para nuestros clientes.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="caja">
+        ${renglon("Cliente:", c.cliente_nombre)}
+        ${renglon("Dirección:", c.cliente_direccion)}
+        <div class="gap"></div>
+        ${renglon("Referencia:", rpu)}
+        ${renglon("Fecha:", MES[f.getMonth()] + " " + f.getFullYear())}
+      </div>
+
+      <div class="datos">
+        <div><b>Comercializadora Marcelestial S.A.S.</b></div>
+        <div><b>WhatsApp:</b> 55 7657 4769</div>
+        <div><b>Correo:</b> contacto@marcelestial.net</div>
+        <div><b>Web:</b> www.marcelestial.net</div>
+      </div>
+    </div>`;
+}
+
+/* ---------- Hoja de anexo: la foto que el vendedor eligió de su carrete ----------
+   La portada es fija, así que la foto del vendedor va en su propia hoja, antes
+   del cierre. Sin foto, esa hoja simplemente no aparece. */
 function hojaProducto(c) {
   if (!c.foto_producto) return "";
   const t = c.tecnico || {};
@@ -711,6 +776,77 @@ function hojaProducto(c) {
       <div class="pie">
         <b>Comercializadora Marcelestial S.A.S.</b> · Perfiles de aluminio · Sistemas fotovoltaicos · Soluciones eléctricas<br>
         WhatsApp 55 7657 4769 · contacto@marcelestial.net · www.marcelestial.net · CDMX y Estado de México
+      </div>
+    </div>`;
+}
+
+/* ---------- Última hoja: monitoreo y contacto ----------
+   Los dibujos del monitor y del celular no son fotos: son gráficos vectoriales
+   dentro del propio documento, así que no pesan nada. */
+function hojaMonitoreo() {
+  return `
+    <div class="hoja monitoreo">
+      <div class="dh">
+        <div><h1>Reporte de visita técnica</h1>
+          <div style="font-size:11.5px;color:#6b7280;margin-top:4px">d) Sistema de monitoreo</div></div>
+        <img src="/icons/logo.png" alt="">
+      </div>
+
+      <p style="font-size:11.5px;line-height:1.6;color:#374151">
+        La instalación dispone de sistema de monitorización disponible para el usuario final, que le
+        permite un control continuo y en tiempo real de la producción solar. Se conforma de inversor
+        y datalogger.</p>
+
+      <div class="mon">
+        <svg viewBox="0 0 320 210" width="280" aria-hidden="true">
+          <rect x="20" y="10" width="280" height="170" rx="8" fill="#1f2a33"/>
+          <rect x="28" y="18" width="264" height="154" rx="3" fill="#f4f7fb"/>
+          <rect x="36" y="26" width="248" height="14" fill="#e3e9f0"/>
+          <rect x="36" y="48" width="60" height="116" fill="#eef2f7"/>
+          <g fill="#2F6FC4"><rect x="110" y="120" width="9" height="40"/><rect x="124" y="100" width="9" height="60"/>
+            <rect x="138" y="86" width="9" height="74"/><rect x="152" y="74" width="9" height="86"/>
+            <rect x="166" y="92" width="9" height="68"/><rect x="180" y="110" width="9" height="50"/>
+            <rect x="194" y="128" width="9" height="32"/></g>
+          <polyline points="110,150 130,120 150,128 175,98 200,112 230,90 270,100"
+                    fill="none" stroke="#F0A93C" stroke-width="2.5"/>
+          <rect x="120" y="190" width="160" height="14" rx="7" fill="#9aa3a8"/>
+        </svg>
+        <div style="flex:1">
+          <div class="pastilla">Seguimiento de la producción</div>
+          <div class="pastilla">Detección de posibles averías</div>
+          <div class="pastilla">Análisis de rendimiento</div>
+          <div class="pastilla">Configuración de reportes</div>
+        </div>
+      </div>
+
+      <div class="cierre">
+        <svg class="tel" viewBox="0 0 170 320" width="128" aria-hidden="true">
+          <rect x="10" y="6" width="150" height="308" rx="26" fill="#1f2a33"/>
+          <rect x="18" y="16" width="134" height="288" rx="18" fill="#eaf1f7"/>
+          <rect x="60" y="22" width="48" height="7" rx="3.5" fill="#1f2a33"/>
+          <rect x="30" y="44" width="110" height="40" rx="6" fill="#fff"/>
+          <circle cx="85" cy="150" r="42" fill="#fff"/>
+          <circle cx="85" cy="150" r="42" fill="none" stroke="#F0A93C" stroke-width="7"
+                  stroke-dasharray="200 64" transform="rotate(-90 85 150)"/>
+          <circle cx="85" cy="150" r="26" fill="#FDF4E6"/>
+          <path d="M85 138 l9 14 h-18Z" fill="#F0A93C"/>
+          <rect x="30" y="214" width="50" height="34" rx="6" fill="#fff"/>
+          <rect x="90" y="214" width="50" height="34" rx="6" fill="#fff"/>
+          <rect x="30" y="256" width="110" height="30" rx="6" fill="#fff"/>
+          <circle cx="55" cy="271" r="9" fill="#dde8f6"/><circle cx="85" cy="271" r="9" fill="#dde8f6"/>
+          <circle cx="115" cy="271" r="9" fill="#dde8f6"/>
+        </svg>
+        <div class="tarjeta">
+          <img src="/icons/logo.png" alt="Marcelestial">
+          <div class="razon">Comercializadora Marcelestial S.A.S.</div>
+          <div class="ct"><svg width="18" height="18" viewBox="0 0 24 24" fill="#134a92"><path d="M12 2a10 10 0 0 0-8.6 15l-1.4 5 5.2-1.4A10 10 0 1 0 12 2zm5.4 14.2c-.2.6-1.2 1.1-1.7 1.2-.5.1-1 .1-1.7-.1-.4-.1-1-.3-1.6-.6-2.9-1.3-4.8-4.2-5-4.4-.1-.2-1.1-1.5-1.1-2.8 0-1.3.7-2 .9-2.2.2-.3.5-.3.7-.3h.5c.2 0 .4 0 .6.5l.8 2c.1.2.1.3 0 .5l-.4.5-.3.3c-.1.1-.3.3-.1.6.2.3.8 1.4 1.8 2.2 1.3 1.1 2.3 1.5 2.6 1.6.3.1.5.1.7-.1l.7-.9c.2-.3.4-.2.6-.1l2 .9c.2.1.4.2.4.3.1.1.1.6-.1 1.2z"/></svg>
+            <b>WhatsApp:</b> 55 7657 4769</div>
+          <div class="ct"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#134a92" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>
+            contacto@marcelestial.net</div>
+          <div class="ct"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#134a92" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+            www.marcelestial.net</div>
+          <div class="nota">Atención y cotizaciones vía WhatsApp — te contactamos de inmediato.</div>
+        </div>
       </div>
     </div>`;
 }
@@ -1318,11 +1454,11 @@ function pintarRecibo() {
     </div>
 
     <div class="card">
-      <h3>Foto del producto</h3>
+      <h3>Foto del equipo</h3>
       <p style="font-size:11.5px;color:var(--slate);margin-bottom:12px">
-        Opcional. Elige una foto de tu carrete —el panel, el inversor, la estructura o una
-        obra parecida ya terminada—. <b>Ésta sí se imprime</b>, en una hoja al final de la
-        propuesta.</p>
+        Opcional. Elige una foto de tu carrete —el panel, la estructura, el inversor o una obra
+        parecida ya terminada—. <b>Ésta sí se imprime</b>, en una hoja al final de la propuesta.
+        Sin foto, esa hoja no aparece.</p>
       <div class="foto-caja">
         <div id="rcProdPrev"></div>
         <div style="flex:1">
@@ -1430,11 +1566,11 @@ function pintarFotoEditor() {
   if (S.edFotoProd) {
     caja.innerHTML = `<img src="${S.edFotoProd}" alt="Foto del producto">`;
     if (quitar) quitar.hidden = false;
-    if (nota) nota.textContent = "Se imprime en la última hoja.";
+    if (nota) nota.textContent = "Se imprime en la hoja del final.";
   } else {
     caja.innerHTML = '<div class="foto-vacia">Sin foto</div>';
     if (quitar) quitar.hidden = true;
-    if (nota) nota.textContent = "Sin foto la propuesta sale en dos hojas.";
+    if (nota) nota.textContent = "Sin foto la propuesta sale igual, sólo sin esa hoja.";
   }
 }
 
@@ -1444,12 +1580,12 @@ function pintarFotoProducto() {
   if (S.rcFotoProd) {
     caja.innerHTML = `<img src="${S.rcFotoProd}" alt="Foto del producto">`;
     if (quitar) quitar.hidden = false;
-    if (nota) nota.textContent = "Se imprimirá al final · "
+    if (nota) nota.textContent = "Se imprime al final · "
       + Math.round(S.rcFotoProd.length / 1400) + " KB aprox.";
   } else {
     caja.innerHTML = '<div class="foto-vacia">Sin foto</div>';
     if (quitar) quitar.hidden = true;
-    if (nota) nota.textContent = "Sin foto la propuesta sale igual, sólo sin la hoja del anexo.";
+    if (nota) nota.textContent = "Sin foto la propuesta sale igual, sólo sin esa hoja.";
   }
 }
 

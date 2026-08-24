@@ -156,7 +156,7 @@ textarea{min-height:84px;resize:vertical}
   body{background:#fff}
   .app,nav.tabs,.fab,header.top,.modal{display:none !important}
   #doc{display:block !important}
-  @page{size:letter;margin:14mm}
+  @page{size:letter;margin:11mm}
 
 }
 #doc .hoja{max-width:7in;margin:0 auto;color:#1f2a25;font-size:12px}
@@ -200,16 +200,61 @@ label.f.destaca>span{color:var(--blue);font-weight:800}
 #doc table.rec tr.anio td{background:#e9f1fb;font-weight:700}
 #doc table.rec tr:last-child td{border-bottom:2px solid #0a3b7d;font-weight:700}
 
-/* ---------- hoja de anexo: la foto del producto ---------- */
+/* ---------- portada de la propuesta ----------
+   Fija para todas las cotizaciones. Ocupa la hoja completa, de orilla a orilla:
+   eso se logra con una página con nombre y margen cero, declarada al final. */
+#doc .hoja.portada{
+  max-width:none;width:8.5in;height:11in;margin:0;padding:0;position:relative;overflow:hidden;
+  background:#fff;page-break-after:always;break-after:page;color:#1f2a25}
+#doc .portada .arriba{padding:.62in .62in 0}
+#doc .portada img.marca{width:2in;height:auto;margin-bottom:18px}
+#doc .portada h1{font-size:31px;font-weight:800;color:#0a3b7d;line-height:1.12;letter-spacing:-.2px}
+#doc .portada .sub{font-size:22px;font-weight:700;color:#13468a;margin-top:9px}
+#doc .portada img.banda{width:100%;height:2.5in;object-fit:cover;object-position:center 42%;
+  border-radius:14px;margin-top:18px;display:block}
+
+#doc .portada .mv{display:grid;grid-template-columns:1fr 1fr;gap:0 34px;margin-top:20px}
+#doc .portada .mv .et{font-size:10px;font-weight:700;letter-spacing:.22em;text-transform:uppercase;
+  color:#3f8fda;border-bottom:2px solid #3f8fda;display:inline-block;padding-bottom:3px}
+#doc .portada .mv .tit{font-size:13px;font-weight:700;color:#0a3b7d;margin:9px 0 7px}
+#doc .portada .mv p{font-size:9.5px;line-height:1.65;color:#4b5563;text-align:justify}
+
+#doc .portada .caja{position:absolute;left:0;bottom:.72in;z-index:2;width:60%;
+  background:linear-gradient(120deg,#2F6FC4 0%,#13468A 100%);color:#fff;
+  padding:26px 40px 26px .62in;border-radius:0 70px 70px 0;box-shadow:0 8px 24px rgba(10,35,80,.18)}
+#doc .portada .caja div{display:flex;gap:10px;font-size:12.5px;line-height:1.85}
+#doc .portada .caja .gap{height:9px}
+#doc .portada .caja .lab{opacity:.85;min-width:70px}
+#doc .portada .caja .val{font-weight:700}
+#doc .portada .datos{position:absolute;right:.62in;bottom:.9in;z-index:2;text-align:right;
+  font-size:11.5px;color:#0a3b7d;line-height:1.85}
+#doc .portada .datos b{font-weight:700}
+
+/* ---------- hoja de anexo: la foto del equipo ---------- */
 #doc .hoja.anexo{page-break-before:always;break-before:page}
-/* La caja tiene alto fijo para que la hoja se vea intencional con cualquier
-   foto: horizontal, vertical o cuadrada. La imagen se centra y nunca se recorta. */
 #doc .foto-anexo{margin-top:14px;border:1px solid #dbe4ef;border-radius:6px;padding:10px;
   background:#f7fafd;height:6.6in;display:flex;align-items:center;justify-content:center;
   break-inside:avoid;page-break-inside:avoid}
 #doc .foto-anexo img{max-width:100%;max-height:100%;width:auto;height:auto;
   object-fit:contain;display:block;border-radius:3px}
 #doc .pie-anexo{margin-top:10px;font-size:11.5px;font-weight:700;color:#0a3b7d;text-align:center}
+
+/* ---------- última hoja: monitoreo y contacto ---------- */
+#doc .hoja.monitoreo{page-break-before:always;break-before:page;position:relative;
+  display:flex;flex-direction:column;min-height:9.2in}
+#doc .monitoreo .mon{display:flex;gap:26px;align-items:center;margin-top:14px}
+#doc .monitoreo .mon svg{flex:none}
+#doc .monitoreo .pastilla{background:linear-gradient(120deg,#2F6FC4,#13468A);color:#fff;
+  border-radius:999px;padding:9px 20px;font-size:12.5px;font-weight:600;margin-bottom:10px}
+#doc .monitoreo .pastilla:last-child{margin-bottom:0}
+#doc .monitoreo .cierre{display:flex;align-items:center;gap:18px;margin-top:auto;padding-top:26px}
+#doc .monitoreo .cierre .tel{flex:none}
+#doc .monitoreo .tarjeta{flex:1;background:#EEF3FB;border-radius:18px;padding:22px 26px}
+#doc .monitoreo .tarjeta img{width:1.5in;height:auto;margin:0 auto}
+#doc .monitoreo .tarjeta .razon{text-align:center;font-size:13px;color:#13468a;font-weight:700;margin:4px 0 12px}
+#doc .monitoreo .ct{display:flex;align-items:center;gap:10px;font-size:12.5px;margin-bottom:8px;color:#1f2a25}
+#doc .monitoreo .ct svg{flex:none}
+#doc .monitoreo .nota{text-align:center;font-size:11px;color:#6b7280;margin-top:10px}
 
 /* ---------- vista previa de la cotización en pantalla ----------
    Se ve la propuesta como quedará en papel, con una barra arriba para
@@ -220,6 +265,7 @@ body.previa{overflow:hidden}
   background:#6B7A90;padding:74px 10px calc(28px + env(safe-area-inset-bottom));
   -webkit-overflow-scrolling:touch}
 #doc.previa .hoja-caja{margin:0 auto 14px;overflow:hidden}
+#doc.previa .hoja.portada{padding:0}
 #doc.previa .hoja{background:#fff;padding:20px 18px;margin:0;
   box-shadow:0 10px 30px rgba(0,0,0,.28);border-radius:3px;
   transform-origin:top left}
@@ -233,6 +279,10 @@ body.previa{overflow:hidden}
 /* ---------- ajustes que sólo aplican al imprimir ----------
    Van al final del archivo para que ganen sobre las reglas de arriba. */
 @media print{
+  /* La portada es la única hoja sin márgenes: se imprime a sangre. */
+  @page portada{ size:letter; margin:0 }
+  #doc .hoja.portada{ page:portada }
+
   /* En la vista previa el documento está flotando sobre la pantalla; al
      imprimir tiene que volver a ser un documento normal o no se pagina. */
   .previa-barra{display:none !important}
@@ -243,20 +293,24 @@ body.previa{overflow:hidden}
 
   /* La propuesta debe caber en una hoja: al imprimir se aprieta un poco el
      interlineado para que el pie no se brinque solo a la página siguiente. */
-  #doc .hoja{font-size:11px}
+  #doc .hoja{font-size:10.5px}
   #doc .dh{padding-bottom:8px;margin-bottom:12px}
   #doc .dh img{height:56px}
   #doc h1{font-size:19px}
-  #doc h2{font-size:13px;margin:9px 0 4px}
+  #doc h2{font-size:12.5px;margin:8px 0 3px}
   #doc th,#doc td{padding:5px 8px}
   #doc .campos{gap:2px 18px}
   #doc .campos div{padding:2px 0}
-  #doc .pie{margin-top:12px;padding-top:7px;font-size:9px;line-height:1.45}
+  #doc .pie{margin-top:10px;padding-top:6px;font-size:8.5px;line-height:1.4}
   /* La hoja de recuperación puede llevar 40 renglones: se aprieta para que la
      tabla completa quepa en una sola página. */
-  #doc table.rec{font-size:9.5px}
-  #doc table.rec th{padding:4px 6px;font-size:8.5px}
-  #doc table.rec td{padding:1px 6px;line-height:1.1}
+  #doc table.rec{font-size:9px}
+  #doc table.rec th{padding:3px 6px;font-size:8px}
+  #doc table.rec td{padding:0.5px 6px;line-height:1.05}
   #doc .hoja.recuperacion p{font-size:8.5px;line-height:1.4}
-  #doc table,#doc .campos{page-break-inside:avoid}
+  /* Las tablas cortas no se parten; la de recuperación SÍ puede partirse, porque
+     lleva 40 renglones y si se le prohíbe brinca entera y deja una hoja vacía. */
+  #doc table:not(.rec),#doc .campos{page-break-inside:avoid}
+  #doc table.rec{page-break-inside:auto}
+  #doc table.rec tr{page-break-inside:avoid}
 }
