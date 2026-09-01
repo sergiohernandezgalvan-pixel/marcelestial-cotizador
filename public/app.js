@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.08.24-3";
+const VERSION = "2026.08.28";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -413,6 +413,70 @@ function editor() {
         Después de cambiarla, toca <b>Guardar</b>.</p>
     </div>
 
+    <div class="card" id="cardSitio">
+      <h3>Vista previa en el techo</h3>
+      <p style="font-size:11.5px;color:var(--slate);margin-bottom:12px">
+        Sube la foto del techo y marca sus cuatro esquinas. La app dibuja
+        <b>los paneles que trae esta cotización</b>, en perspectiva, sobre la imagen real.
+        Sirve igual una foto de dron o una vista de satélite de Google Maps.</p>
+      <input type="file" accept="image/*" id="edSitioFoto" hidden>
+      <div id="sitioVacio">
+        <div class="acciones">
+          <button class="btn sec sm" type="button" onclick="elegirFotoSitio('dron')">
+            Foto de dron</button>
+          <button class="btn sec sm" type="button" onclick="elegirFotoSitio('satelite')">
+            Imagen de Google Maps</button>
+        </div>
+      </div>
+      <details class="sitio-guia">
+        <summary>¿No hay dron? Cómo sacar la imagen y las medidas de Google Maps</summary>
+        <ol>
+          <li>Abre <b>Google Maps</b> y busca la dirección del cliente.</li>
+          <li>Cambia a <b>vista de satélite</b> y acerca hasta que el techo llene la pantalla.</li>
+          <li>Captura la pantalla. <b>Deja visible la franja de abajo</b>, donde aparece el
+              crédito de Google: esa parte no se puede recortar ni tapar.</li>
+          <li>Para las medidas: clic derecho sobre una esquina del techo →
+              <b>Medir distancia</b> → clic en la esquina de enfrente. Ése es el
+              <b>ancho</b>. Repite para el <b>fondo</b>.</li>
+          <li>Sube aquí la captura con el botón <b>Imagen de Google Maps</b> y captura
+              esas dos medidas.</li>
+        </ol>
+        <p class="sitio-ojo">⚠ Usa <b>Google Maps</b>, no <b>Google Earth</b>: las imágenes de
+          Google Earth no se permiten con fines comerciales ni promocionales. Las capturas de
+          Maps sí pueden usarse en propuestas y documentos de la empresa, siempre que se
+          conserve el crédito a Google.</p>
+        <p class="sitio-ojo">La vista de satélite puede tener meses o años de antigüedad y no
+          muestra sombras, tuberías ni instalaciones nuevas: la distribución final se define
+          en la visita técnica.</p>
+      </details>
+      <div id="sitioTrabajo" hidden>
+        <label class="sitio-fuente">
+          <input type="checkbox" id="sitioSatelite">
+          <span>Esta imagen viene de <b>Google Maps</b> — se respeta y se vuelve a escribir
+            el crédito de Google sobre el montaje.</span>
+        </label>
+        <p class="sitio-paso" id="sitioPaso"></p>
+        <canvas id="sitioLienzo" class="sitio-lienzo"></canvas>
+        <div class="acciones" style="margin:10px 0">
+          <button class="btn sec sm" type="button" onclick="reiniciarEsquinas()">Volver a marcar</button>
+          <button class="btn sec sm" type="button" id="btnArea" onclick="agregarArea()">
+            Agregar otra área</button>
+          <button class="btn sec sm" type="button" onclick="document.getElementById('edSitioFoto').click()">
+            Cambiar foto</button>
+          <button class="btn dan sm" type="button" onclick="quitarSitio()">Quitar</button>
+        </div>
+        <p class="sitio-ayuda">¿Techo a dos aguas, o nave más patio? Marca una caída, toca
+          <b>Agregar otra área</b> y marca la siguiente. Los módulos de la cotización se
+          reparten solos entre ellas; si quieres otro reparto, escribe cuántos van en cada una.</p>
+        <div id="sitioAreas"></div>
+        <p class="sitio-nota" id="sitioCaben"></p>
+        <div class="acciones">
+          <button class="btn pri sm" type="button" onclick="verVistaSitio(this)">Ver cómo queda</button>
+        </div>
+        <div id="sitioResultado"></div>
+      </div>
+    </div>
+
     ${e._full && e._full.recibo_foto ? `
     <div class="card">
       <h3>Foto del recibo</h3>
@@ -447,6 +511,32 @@ function editor() {
   S.edFotoProd = (e._full && e._full.foto_producto) || null;
   $("#edProd")?.addEventListener("change", tomarFotoEditor);
   pintarFotoEditor();
+
+  /* vista previa en el techo */
+  S.edSitioFoto = (e._full && e._full.foto_sitio) || null;
+  /* lo guardado puede venir en la forma vieja (un área suelta): se normaliza
+     siempre a una lista de áreas, para que el resto del código sea uno solo. */
+  S.edSitio = (e._full && e._full.sitio)
+    ? {
+        fuente: e._full.sitio.fuente === "satelite" ? "satelite" : "dron",
+        ancho_foto: e._full.sitio.ancho_foto || 0,
+        alto_foto: e._full.sitio.alto_foto || 0,
+        areas: MCSitio.areasDe(e._full.sitio).map((a) => ({ paneles: 0, ...a })),
+      }
+    : null;
+  S.edSitioImagen = null;
+  $("#edSitioFoto")?.addEventListener("change", tomarFotoSitio);
+  const lz = $("#sitioLienzo");
+  if (lz) {
+    lz.addEventListener("click", tocarLienzo);
+    lz.addEventListener("touchstart", (ev) => { ev.preventDefault(); tocarLienzo(ev); }, { passive: false });
+  }
+  if (S.edSitio && $("#sitioSatelite")) $("#sitioSatelite").checked = S.edSitio.fuente === "satelite";
+  $("#sitioSatelite")?.addEventListener("change", (ev) => {
+    if (!S.edSitio) return;
+    S.edSitio.fuente = ev.target.checked ? "satelite" : "dron";
+  });
+  pintarSitio();
   ["ahActual", "ahNuevo"].forEach((id) => $("#" + id).addEventListener("input", calcAhorro));
   calcAhorro();
 }
@@ -532,6 +622,10 @@ async function _guardarCotizacion() {
     roi: numero($("#ahRoi").value), anual: numero($("#ahAnual").value),
   };
   if (S.edFotoProd !== undefined) e.foto_producto = S.edFotoProd;
+  if (S.edSitioFoto !== undefined) e.foto_sitio = S.edSitioFoto;
+  if (S.edSitioFoto === "" || S.edSitio === null) e.sitio = null;
+  else if (S.edSitio && (S.edSitio.areas || []).length &&
+           S.edSitio.areas.every((a) => (a.esquinas || []).length === 4)) e.sitio = S.edSitio;
   if (!e.cliente_id) return aviso("#edAviso", "Selecciona un cliente antes de guardar.");
   if (!e.partidas.length) return aviso("#edAviso", "Agrega al menos un concepto.");
   try {
@@ -564,6 +658,12 @@ async function imprimirCotizacion(conRecibo = false) {
   const total = partidas.reduce((a, p) => a + numero(p.cantidad) * numero(p.precio), 0);
   const t = c.tecnico || {}, ah = c.ahorro || {};
   const campo = (k, v) => v ? `<div><span>${k}</span><b>${esc(v)}</b></div>` : "";
+  /* La superficie que ocupa el arreglo: número de módulos × los m² por panel que
+     están en los parámetros del dimensionamiento (3.1 m² si no se cambiaron). */
+  const m2Panel = Number(paramDim().m2_por_panel) || 3.1;
+  const nPaneles = numero(t.paneles);
+  const superficie = nPaneles > 0
+    ? (nPaneles * m2Panel).toLocaleString("es-MX", { maximumFractionDigits: 1 }) + " m²" : "";
 
   $("#doc").innerHTML = `
     ${hojaPortada(c)}
@@ -600,10 +700,16 @@ async function imprimirCotizacion(conRecibo = false) {
         ${campo("Ubicación", t.ubicacion)}${campo("Potencia pico", t.kwp ? t.kwp + " kWp" : "")}
         ${campo("Producción", t.produccion ? t.produccion + " kWh bim." : "")}${campo("Tipo de cubierta", t.cubierta)}
         ${campo("Tipo de estructura", t.estructura)}${campo("Tensión de interconexión", t.tension)}
-        ${campo("Número de paneles", t.paneles)}${campo("Capacidad por panel", t.wpanel ? t.wpanel + " W" : "")}
+        ${campo("Número de paneles", t.paneles)}${campo("Superficie requerida", superficie)}
+        ${campo("Capacidad por panel", t.wpanel ? t.wpanel + " W" : "")}
         ${campo("Marca y modelo del panel", t.marcapanel)}${campo("Número de inversores", t.inversores)}
         ${campo("Capacidad del inversor", t.capinversor)}${campo("Marca del inversor", t.marcainversor)}
-      </div>` : ""}
+      </div>
+      ${superficie ? `<p style="font-size:10.5px;color:#6b7280;margin-top:7px;line-height:1.5">
+        La <b>superficie requerida</b> es el área aproximada que ocupa el arreglo, a razón de
+        ${m2Panel} m² por módulo, ya considerando la separación entre hileras. No incluye
+        pasillos de servicio ni áreas que deban dejarse libres por sombras u obstáculos: eso
+        se define en la visita técnica.</p>` : ""}` : ""}
 
       ${(ah.actual || ah.roi) ? `<h2>Análisis de ahorro</h2><div class="campos">
         ${campo("Pago actual a CFE", ah.actual ? money(ah.actual) : "")}
@@ -652,9 +758,11 @@ async function imprimirCotizacion(conRecibo = false) {
       </div>
     </div>
     ${tablaRecuperacion(c, total)}
+    ${hojaSitio(c)}
     ${hojaProducto(c)}
     ${hojaMonitoreo()}
     ${S.demo ? '<div class="pie-demo">Documento generado en el sitio de demostración · cifras y precios ficticios</div>' : ""}`;
+  pintarHojaSitio(c);              /* el montaje se dibuja al vuelo */
   abrirPrevia(c.folio);
 }
 
@@ -776,6 +884,48 @@ function hojaPortada(c) {
 /* ---------- Hoja de anexo: la foto que el vendedor eligió de su carrete ----------
    La portada es fija, así que la foto del vendedor va en su propia hoja, antes
    del cierre. Sin foto, esa hoja simplemente no aparece. */
+/* Hoja de la vista previa en el techo. Se dibuja al vuelo con la foto de
+   dron guardada: así siempre coincide con los paneles de la cotización,
+   aunque después se cambien. */
+function hojaSitio(c) {
+  if (!c.foto_sitio || !c.sitio) return "";
+  const t = c.tecnico || {};
+  return `
+    <div class="hoja sitio">
+      <div class="dh">
+        <div><h1>Así se vería en tu techo</h1>
+          <div style="font-size:11.5px;color:#6b7280;margin-top:4px">
+            Folio ${esc(c.folio || "")} · ${esc(c.cliente_nombre || "")}</div></div>
+        <img src="/icons/logo.png" alt="">
+      </div>
+      <div id="sitioHoja"><img class="foto-sitio" src="${c.foto_sitio}" alt="Vista previa en el techo"></div>
+      <p style="font-size:10.5px;color:#6b7280;margin-top:10px;line-height:1.5">
+        Montaje sobre la fotografía real del inmueble, con
+        ${esc(String(t.paneles || ""))} módulos${t.wpanel ? " de " + esc(String(t.wpanel)) + " W" : ""}
+        dibujados a escala${MCSitio.areasDe(c.sitio).length > 1
+          ? ` y distribuidos en ${MCSitio.areasDe(c.sitio).length} superficies` : ""}.
+        <b>Es una imagen de referencia:</b> la distribución definitiva,
+        los pasillos de servicio y los apartados por sombras o instalaciones existentes se
+        determinan en la visita técnica.${c.sitio.fuente === "satelite"
+          ? ` Imagen de satélite <b>© Google</b>; puede no reflejar cambios recientes en el inmueble.`
+          : ""}</p>
+      <div class="pie">
+        <b>Comercializadora Marcelestial S.A.S.</b> · Perfiles de aluminio · Sistemas fotovoltaicos · Soluciones eléctricas<br>
+        WhatsApp 55 7657 4769 · contacto@marcelestial.net · www.marcelestial.net · CDMX y Estado de México
+      </div>
+    </div>`;
+}
+
+/* Cambia la foto cruda por el montaje con los módulos ya dibujados. */
+async function pintarHojaSitio(c) {
+  const caja = document.getElementById("sitioHoja");
+  if (!caja || !c.foto_sitio || !c.sitio) return;
+  try {
+    const r = await MCSitio.generarVistaSitio(c.foto_sitio, c.sitio, c.tecnico || {}, "/icons/logo.png");
+    caja.innerHTML = `<img class="foto-sitio" src="${r.url}" alt="Vista previa en el techo">`;
+  } catch { /* si algo falla, se queda la foto tal cual */ }
+}
+
 function hojaProducto(c) {
   if (!c.foto_producto) return "";
   const t = c.tecnico || {};
@@ -1569,6 +1719,297 @@ async function tomarFotoProducto(ev) {
 }
 
 window.quitarFotoProducto = () => { S.rcFotoProd = null; pintarFotoProducto(); };
+
+/* =======================================================================
+   Vista previa en el techo
+   El vendedor sube la foto (de dron, del teléfono o de Google Maps) y toca
+   las cuatro esquinas del techo. Con eso y las medidas en metros, la app
+   dibuja los módulos en perspectiva.
+
+   Un techo a dos aguas —o una nave más su patio— son dos superficies planas
+   distintas: se marcan como ÁREAS separadas dentro de la misma foto, hasta
+   cuatro, y los módulos cotizados se reparten entre ellas.
+   ===================================================================== */
+const ESQUINAS = ["arriba a la izquierda", "arriba a la derecha",
+                  "abajo a la derecha", "abajo a la izquierda"];
+const COLOR_AREA = ["#F0A93C", "#2FB6A2", "#E0679B", "#7C6BE0"];
+
+const areaVacia = () => ({ esquinas: [], ancho_m: 0, fondo_m: 0, filas: 0, columnas: 0, paneles: 0 });
+const areasEd = () => (S.edSitio && Array.isArray(S.edSitio.areas)) ? S.edSitio.areas : [];
+/* La que se está marcando: la primera que aún no tiene sus cuatro esquinas. */
+const areaActiva = () => areasEd().findIndex((a) => (a.esquinas || []).length < 4);
+
+async function tomarFotoSitio(ev) {
+  const archivo = ev.target.files && ev.target.files[0];
+  if (!archivo) return;
+  try {
+    let datos = await comprimirImagen(archivo, 1600, 0.82);
+    if (datos.length > 1800000) datos = await comprimirImagen(archivo, 1200, 0.7);
+    const fuente = S.edSitioFuente || (S.edSitio && S.edSitio.fuente) || "dron";
+    S.edSitioFuente = null;
+    S.edSitioFoto = datos;
+    S.edSitio = { fuente, areas: [areaVacia()] };
+    await pintarSitio();
+    if ($("#sitioSatelite")) $("#sitioSatelite").checked = fuente === "satelite";
+    aviso("#edAviso", "Ahora toca las cuatro esquinas del techo, en orden.", "ok");
+  } catch {
+    aviso("#edAviso", "No se pudo leer la imagen. Intenta con otra foto.");
+  } finally { ev.target.value = ""; }
+}
+
+/* Los dos botones del estado vacío: el mismo selector de archivo, pero
+   dejando anotado de dónde sale la imagen. */
+window.elegirFotoSitio = (fuente) => {
+  S.edSitioFuente = fuente === "satelite" ? "satelite" : "dron";
+  document.getElementById("edSitioFoto").click();
+};
+
+window.quitarSitio = () => {
+  S.edSitioFoto = "";                      /* cadena vacía = quitarla al guardar */
+  S.edSitio = null;
+  S.edSitioFuente = null;
+  pintarSitio();
+  aviso("#edAviso", "Se quitará al guardar.", "ok");
+};
+
+/* Borra las esquinas del área que se está marcando; si ya están las cuatro,
+   las de la última. La medida capturada se conserva. */
+window.reiniciarEsquinas = () => {
+  const areas = areasEd();
+  if (!areas.length) return;
+  const i = areaActiva();
+  areas[i >= 0 ? i : areas.length - 1].esquinas = [];
+  pintarSitio();
+};
+
+window.agregarArea = () => {
+  const areas = areasEd();
+  if (!areas.length) return;
+  if (areas.length >= MCSitio.TOPE_AREAS)
+    return aviso("#edAviso", `Se pueden marcar hasta ${MCSitio.TOPE_AREAS} áreas en una foto.`);
+  if (areaActiva() >= 0)
+    return aviso("#edAviso", "Primero termina de marcar las cuatro esquinas del área que sigue.");
+  areas.push(areaVacia());
+  pintarSitio();
+  aviso("#edAviso", `Marca las cuatro esquinas del área ${areas.length}.`, "ok");
+};
+
+window.quitarArea = (i) => {
+  const areas = areasEd();
+  if (areas.length <= 1) return aviso("#edAviso", "Debe quedar al menos un área. Usa Quitar para borrar la foto.");
+  areas.splice(i, 1);
+  pintarSitio();
+};
+
+/* Dibuja la foto a escala dentro del recuadro y encima las áreas marcadas. */
+async function pintarSitio() {
+  const vacio = $("#sitioVacio"), trabajo = $("#sitioTrabajo");
+  if (!vacio || !trabajo) return;
+  const hay = !!(S.edSitioFoto && S.edSitio);
+  vacio.hidden = hay;
+  trabajo.hidden = !hay;
+  if (!hay) return;
+
+  const lienzo = $("#sitioLienzo");
+  const img = await new Promise((ok, mal) => {
+    const i = new Image(); i.onload = () => ok(i); i.onerror = mal; i.src = S.edSitioFoto;
+  });
+  S.edSitio.ancho_foto = img.naturalWidth;
+  S.edSitio.alto_foto = img.naturalHeight;
+
+  const ancho = Math.min(lienzo.parentElement.clientWidth || 340, img.naturalWidth);
+  const esc = ancho / img.naturalWidth;
+  lienzo.width = ancho;
+  lienzo.height = Math.round(img.naturalHeight * esc);
+  S.edSitioEscala = esc;
+
+  const ctx = lienzo.getContext("2d");
+  ctx.drawImage(img, 0, 0, lienzo.width, lienzo.height);
+
+  const areas = areasEd();
+  const activa = areaActiva();
+  areas.forEach((area, ia) => {
+    const e = area.esquinas || [];
+    const color = COLOR_AREA[ia % COLOR_AREA.length];
+    if (e.length) {
+      ctx.beginPath();
+      e.forEach(([x, y], i) => (i ? ctx.lineTo(x * esc, y * esc) : ctx.moveTo(x * esc, y * esc)));
+      if (e.length === 4) ctx.closePath();
+      ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+      if (e.length === 4) { ctx.fillStyle = color + "33"; ctx.fill(); }
+    }
+    e.forEach(([x, y], i) => {
+      ctx.beginPath(); ctx.arc(x * esc, y * esc, 11, 0, Math.PI * 2);
+      ctx.fillStyle = (ia === activa || activa < 0) ? "#0A2A5E" : "#5A6B85"; ctx.fill();
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = "#fff"; ctx.font = "700 12px system-ui,sans-serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(String(i + 1), x * esc, y * esc);
+    });
+    /* el número del área, sobre su primera esquina */
+    if (areas.length > 1 && e.length) {
+      const [x, y] = e[0];
+      ctx.beginPath(); ctx.arc(x * esc + 17, y * esc - 15, 10, 0, Math.PI * 2);
+      ctx.fillStyle = color; ctx.fill();
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = "#12233F"; ctx.font = "700 12px system-ui,sans-serif";
+      ctx.fillText(String(ia + 1), x * esc + 17, y * esc - 15);
+    }
+  });
+
+  const paso = $("#sitioPaso");
+  if (paso) {
+    const cuantas = areas.length;
+    const nombre = cuantas > 1 ? ` del área ${activa + 1}` : " del techo";
+    paso.textContent = activa >= 0
+      ? `Toca la esquina ${ESQUINAS[areas[activa].esquinas.length]}${nombre} `
+        + `(${areas[activa].esquinas.length + 1} de 4)`
+      : cuantas > 1
+        ? `Las ${cuantas} áreas están marcadas. Captura las medidas de cada una.`
+        : "Las cuatro esquinas están marcadas. Ahora captura las medidas.";
+  }
+  const btn = $("#btnArea");
+  if (btn) btn.hidden = areas.length >= MCSitio.TOPE_AREAS;
+
+  pintarAreas();
+  calcularCaben();
+}
+
+/* La lista de áreas con sus medidas. Se redibuja sólo cuando cambia el número
+   de áreas o sus esquinas, nunca al teclear: así no se pierde el cursor. */
+function pintarAreas() {
+  const caja = $("#sitioAreas");
+  if (!caja) return;
+  const areas = areasEd();
+  const uno = areas.length === 1;
+  caja.innerHTML = areas.map((a, i) => `
+    <div class="sitio-area">
+      <div class="sitio-area-t">
+        <b><span class="pin" style="background:${COLOR_AREA[i % COLOR_AREA.length]}"></span>
+          ${uno ? "Medidas del techo" : "Área " + (i + 1)}</b>
+        ${uno ? "" : `<button class="btn dan sm" type="button" onclick="quitarArea(${i})">Quitar área</button>`}
+      </div>
+      <div class="campos">
+        <label class="f"><span>Ancho (m)</span>
+          <input type="number" step="0.1" min="1" inputmode="decimal"
+                 id="sitioAncho${i}" data-area="${i}" data-campo="ancho_m"
+                 value="${a.ancho_m || ""}"></label>
+        <label class="f"><span>Fondo (m)</span>
+          <input type="number" step="0.1" min="1" inputmode="decimal"
+                 id="sitioFondo${i}" data-area="${i}" data-campo="fondo_m"
+                 value="${a.fondo_m || ""}"></label>
+      </div>
+      ${uno ? "" : `
+      <label class="f"><span>Módulos en esta área</span>
+        <input type="number" step="1" min="0" inputmode="numeric"
+               id="sitioPan${i}" data-area="${i}" data-campo="paneles"
+               placeholder="automático" value="${a.paneles || ""}"></label>`}
+    </div>`).join("");
+  caja.oninput = (ev) => {
+    const el = ev.target;
+    if (!el.dataset || el.dataset.area === undefined) return;
+    const a = areasEd()[Number(el.dataset.area)];
+    if (!a) return;
+    a[el.dataset.campo] = Number(el.value) || 0;
+    calcularCaben();
+  };
+}
+
+function tocarLienzo(ev) {
+  const i = areaActiva();
+  if (i < 0) return;
+  const lienzo = $("#sitioLienzo");
+  const r = lienzo.getBoundingClientRect();
+  const t = ev.touches && ev.touches[0] ? ev.touches[0] : ev;
+  const x = (t.clientX - r.left) * (lienzo.width / r.width) / S.edSitioEscala;
+  const y = (t.clientY - r.top) * (lienzo.height / r.height) / S.edSitioEscala;
+  areasEd()[i].esquinas.push([Math.round(x), Math.round(y)]);
+  pintarSitio();
+}
+
+/* Cuántos módulos caben con las medidas capturadas, contra los cotizados. */
+function calcularCaben() {
+  const nota = $("#sitioCaben");
+  if (!nota || !S.edSitio) return;
+  const areas = areasEd();
+  const cotizados = Number(leerTecnico().paneles) || 0;
+  const conMedidas = areas.filter((a) => Number(a.ancho_m) > 0 && Number(a.fondo_m) > 0);
+  if (conMedidas.length !== areas.length || !areas.length) {
+    nota.textContent = areas.length > 1
+      ? "Captura el ancho y el fondo de cada área para saber cuántos módulos caben."
+      : "Captura el ancho y el fondo para saber cuántos módulos caben.";
+    nota.className = "sitio-nota";
+    return;
+  }
+  const rep = MCSitio.repartir(areas, cotizados);
+  /* el acomodo de cada área se guarda para que el dibujo no lo recalcule mal */
+  areas.forEach((a, i) => {
+    const ac = MCSitio.acomodo(Number(a.ancho_m), Number(a.fondo_m), rep.asignado[i]);
+    a.filas = ac.filas; a.columnas = ac.columnas; a.giro = ac.giro;
+  });
+  const detalle = areas.length > 1
+    ? " (" + rep.asignado.map((n, i) => `área ${i + 1}: ${n}`).join(" · ") + ")"
+    : "";
+  if (!rep.caben) {
+    nota.textContent = "Con esas medidas no cabe ni un módulo. Revisa el ancho y el fondo.";
+    nota.className = "sitio-nota mal";
+  } else if (cotizados && rep.total < cotizados) {
+    /* No alcanzan: o el techo es chico, o el reparto a mano dejó módulos fuera. */
+    const aMano = areas.some((a) => Number(a.paneles) > 0);
+    nota.innerHTML = cotizados > rep.caben
+      ? `⚠ En ${areas.length > 1 ? "esas áreas" : "ese techo"} caben <b>${rep.caben}</b>
+         módulos y la cotización trae <b>${cotizados}</b>. Se dibujarán
+         ${rep.total}${detalle}; revisa las medidas o el número de paneles.`
+      : `⚠ Se dibujarán <b>${rep.total}</b> de los <b>${cotizados}</b> cotizados${detalle}.
+         ${aMano ? "El reparto que escribiste a mano deja fuera "
+                 : "No alcanza el espacio para "}${cotizados - rep.total} módulos.`;
+    nota.className = "sitio-nota mal";
+  } else {
+    nota.innerHTML = `Caben hasta <b>${rep.caben}</b> módulos · se dibujarán los
+      <b>${rep.total}</b> de la cotización${detalle}.`;
+    nota.className = "sitio-nota bien";
+  }
+}
+
+function leerTecnico() {
+  const t = {};
+  $$("[data-tec]").forEach((i) => { t[i.dataset.tec] = i.value.trim(); });
+  return t;
+}
+
+window.verVistaSitio = async function (boton) {
+  const areas = areasEd();
+  if (!areas.length || areas.some((a) => (a.esquinas || []).length !== 4))
+    return aviso("#edAviso", areas.length > 1
+      ? "Faltan esquinas por marcar en alguna de las áreas."
+      : "Marca las cuatro esquinas del techo.");
+  if (areas.some((a) => !(Number(a.ancho_m) > 0 && Number(a.fondo_m) > 0)))
+    return aviso("#edAviso", areas.length > 1
+      ? "Captura el ancho y el fondo de cada área, en metros."
+      : "Captura el ancho y el fondo del techo, en metros.");
+  const tec = leerTecnico();
+  if (!Number(tec.paneles) || !Number(tec.wpanel))
+    return aviso("#edAviso", "Primero captura el número de paneles y su capacidad en watts.");
+  calcularCaben();
+  await conBoton(boton, async () => {
+    try {
+      const r = await MCSitio.generarVistaSitio(S.edSitioFoto, S.edSitio, tec, "/icons/logo.png");
+      S.edSitioImagen = r.url;
+      const reparto = r.areas > 1
+        ? " " + r.porArea.map((n, i) => `Área ${i + 1}: ${n}.`).join(" ")
+        : "";
+      $("#sitioResultado").innerHTML = `
+        <img class="sitio-resultado" src="${r.url}" alt="Vista previa en el techo">
+        <div class="acciones" style="margin-top:10px">
+          <a class="btn pri sm" download="vista-previa.jpg" href="${r.url}">Descargar imagen</a>
+        </div>
+        <p class="sitio-nota">Se dibujaron ${r.dibujados} de los ${r.cotizados} módulos
+          cotizados.${reparto}
+          Toca <b>Guardar</b> para que la vista quede en la cotización y salga en el PDF.</p>`;
+      aviso("#edAviso", "", "ok");
+    } catch (e) { aviso("#edAviso", e.message); }
+  }, "Dibujando…");
+};
 
 /* La misma foto, pero dentro de una cotización ya guardada. */
 async function tomarFotoEditor(ev) {

@@ -17,6 +17,49 @@ const esDemostracion = () => String(process.env.MODO_DEMO || "") === "1";
 
 /* Texto listo para comparar: sin acentos y en minúsculas, igual que hace la
    app en el teléfono, para que buscar «plasticos» encuentre «PLÁSTICOS». */
+/* Los datos del techo que marcó el vendedor: cuatro esquinas dentro de la
+   foto, las medidas en metros y el acomodo. Se revisa aquí para que no entre
+   basura a la base ni números absurdos que luego rompan el dibujo. */
+const TOPE_AREAS = 4;
+
+/* Una superficie plana del techo: sus cuatro esquinas dentro de la foto, sus
+   medidas en metros y el acomodo. Un techo a dos aguas trae dos de éstas. */
+function areaValida(v) {
+  if (!v || typeof v !== "object") return null;
+  const e = Array.isArray(v.esquinas) ? v.esquinas : [];
+  if (e.length !== 4) return null;
+  const puntos = e.map((p) => [Number(p[0]), Number(p[1])]);
+  if (puntos.some((p) => !Number.isFinite(p[0]) || !Number.isFinite(p[1]))) return null;
+  const entre = (x, min, max) => Number.isFinite(x) && x >= min && x <= max;
+  const ancho = Number(v.ancho_m), fondo = Number(v.fondo_m);
+  const filas = Math.round(Number(v.filas)), columnas = Math.round(Number(v.columnas));
+  if (!entre(ancho, 1, 500) || !entre(fondo, 1, 500)) return null;
+  if (!entre(filas, 1, 60) || !entre(columnas, 1, 60)) return null;
+  /* Los módulos que el vendedor fijó a mano para esta área. Cero = automático. */
+  const paneles = Math.round(Number(v.paneles));
+  return {
+    esquinas: puntos, ancho_m: ancho, fondo_m: fondo, filas, columnas,
+    giro: v.giro === true,
+    paneles: entre(paneles, 1, 3000) ? paneles : 0,
+  };
+}
+
+function sitioValido(v) {
+  if (!v || typeof v !== "object") return null;
+  /* Se acepta la forma vieja —un área suelta— y la nueva, con lista de áreas. */
+  const crudas = Array.isArray(v.areas) && v.areas.length ? v.areas : [v];
+  if (crudas.length > TOPE_AREAS) return null;
+  const areas = crudas.map(areaValida);
+  if (!areas.length || areas.some((a) => a === null)) return null;
+  /* De dónde salió la imagen: de un dron o de una captura de Google Maps.
+     Con satélite el montaje deja libre la franja del crédito de Google. */
+  const fuente = v.fuente === "satelite" ? "satelite" : "dron";
+  return JSON.stringify({
+    areas, fuente,
+    ancho_foto: Number(v.ancho_foto) || 0, alto_foto: Number(v.alto_foto) || 0,
+  });
+}
+
 const sinAcentos = (v) => String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 const soloAlfaNum = (v) => String(v || "").replace(/[^0-9a-zA-Z]/g, "").toLowerCase();
 
@@ -584,7 +627,7 @@ export default async (req) => {
         const partidas = Array.isArray(cuerpo.partidas) ? cuerpo.partidas : [];
         const c = await conFolio(async (folio) => {
           const [fila] = await db.sql`
-            INSERT INTO cotizaciones (folio, cliente_id, vendedor_id, estatus, linea, tipo, tecnico, partidas, ahorro, recibo, recibo_foto, foto_producto, comentarios, total)
+            INSERT INTO cotizaciones (folio, cliente_id, vendedor_id, estatus, linea, tipo, tecnico, partidas, ahorro, recibo, recibo_foto, foto_producto, foto_sitio, sitio, comentarios, total)
             VALUES (${folio}, ${num(cuerpo.cliente_id) || null}, ${yo.id},
                     ${limpio(cuerpo.estatus, 20) || "borrador"},
                     ${limpio(cuerpo.linea, 20) || "fotovoltaico"}, ${limpio(cuerpo.tipo, 10) || "formal"},
@@ -594,6 +637,8 @@ export default async (req) => {
                     ${JSON.stringify(cuerpo.recibo || {})}::jsonb,
                     ${fotoValida(cuerpo.recibo_foto)},
                     ${fotoValida(cuerpo.foto_producto)},
+                    ${fotoValida(cuerpo.foto_sitio)},
+                    ${sitioValido(cuerpo.sitio)}::jsonb,
                     ${limpio(cuerpo.comentarios, 2000)}, ${totalDePartidas(partidas)})
             RETURNING *`;
           return fila;
@@ -618,6 +663,10 @@ export default async (req) => {
                                   ELSE COALESCE(${fotoValida(cuerpo.recibo_foto)}, recibo_foto) END,
             foto_producto  = CASE WHEN ${cuerpo.foto_producto === "" ? true : false} THEN NULL
                                   ELSE COALESCE(${fotoValida(cuerpo.foto_producto)}, foto_producto) END,
+            foto_sitio     = CASE WHEN ${cuerpo.foto_sitio === "" ? true : false} THEN NULL
+                                  ELSE COALESCE(${fotoValida(cuerpo.foto_sitio)}, foto_sitio) END,
+            sitio          = CASE WHEN ${cuerpo.sitio === null || cuerpo.foto_sitio === "" ? true : false} THEN NULL
+                                  ELSE COALESCE(${sitioValido(cuerpo.sitio)}::jsonb, sitio) END,
             comentarios    = COALESCE(${limpio(cuerpo.comentarios, 2000)}, comentarios),
             total          = ${totalDePartidas(partidas)},
             actualizado_en = NOW()

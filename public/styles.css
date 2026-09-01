@@ -175,6 +175,46 @@ textarea{min-height:84px;resize:vertical}
 .cotcli .item:last-of-type{margin-bottom:0}
 .cotcli .vacio{padding:16px 0}
 
+/* ---------- vista previa en el techo ---------- */
+.sitio-lienzo{width:100%;height:auto;display:block;border-radius:var(--r);
+  border:1px solid var(--line);background:#EEF2F7;cursor:crosshair;touch-action:manipulation}
+.sitio-paso{font-size:12.5px;font-weight:600;color:var(--navy2);margin-bottom:8px}
+.sitio-nota{font-size:12px;color:var(--slate);line-height:1.5;margin:8px 0}
+.sitio-nota.bien{color:var(--ok)}
+.sitio-nota.mal{color:var(--warn);font-weight:600}
+.sitio-resultado{width:100%;height:auto;display:block;border-radius:var(--r);
+  border:1px solid var(--line);margin-top:12px}
+#cardSitio .campos{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+/* la guía para sacar la imagen de Google Maps cuando no hay dron */
+.sitio-guia{margin:12px 0 4px;border:1px solid var(--line);border-radius:var(--r);
+  background:#F7FAFD;overflow:hidden}
+.sitio-guia>summary{cursor:pointer;padding:10px 12px;font-size:12px;font-weight:600;
+  color:var(--navy2);list-style:none}
+.sitio-guia>summary::-webkit-details-marker{display:none}
+.sitio-guia>summary::before{content:"▸ ";color:var(--slate)}
+.sitio-guia[open]>summary::before{content:"▾ "}
+.sitio-guia ol{margin:0;padding:0 14px 4px 30px}
+.sitio-guia li{font-size:12px;color:var(--slate);line-height:1.55;margin-bottom:6px}
+.sitio-ojo{font-size:11.5px;color:var(--slate);line-height:1.55;margin:0 12px 10px;
+  padding:8px 10px;background:#FFF6E8;border-radius:8px;border:1px solid #F2DFC0}
+.sitio-fuente{display:flex;gap:9px;align-items:flex-start;margin:0 0 12px;
+  padding:9px 10px;background:#F1F6FC;border:1px solid var(--line);border-radius:var(--r)}
+.sitio-fuente input{margin-top:2px;width:17px;height:17px;flex:0 0 auto}
+.sitio-fuente span{font-size:11.5px;color:var(--slate);line-height:1.5}
+
+/* las áreas del techo: una por cada agua o superficie plana */
+.sitio-ayuda{font-size:11.5px;color:var(--slate);line-height:1.55;margin:0 0 10px}
+.sitio-area{border:1px solid var(--line);border-radius:var(--r);padding:10px 11px;margin-bottom:10px}
+.sitio-area-t{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.sitio-area-t b{font-size:12.5px;color:var(--navy2);display:flex;align-items:center;gap:7px}
+.sitio-area-t .pin{width:11px;height:11px;border-radius:3px;display:inline-block;flex:0 0 auto}
+.sitio-area .campos{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+#sitioAreas .f{margin-bottom:0}
+
+/* la hoja del techo dentro del documento imprimible */
+#doc .hoja.sitio .foto-sitio{width:100%;border-radius:8px;display:block}
+
 /* ---------- sitio de demostración ---------- */
 /* La cinta y el espacio que deja el cuerpo miden lo mismo a propósito: si no,
    el encabezado se mete debajo de la cinta por uno o dos píxeles. */

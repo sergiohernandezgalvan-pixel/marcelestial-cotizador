@@ -3,7 +3,7 @@
    actualización publicada llegue de inmediato. El caché solo sirve de respaldo cuando
    no hay señal. Íconos y manifiesto sí se sirven desde caché. */
 
-const CACHE = "mc-cotizador-v6";
+const CACHE = "mc-cotizador-v10";
 const ESTATICOS = [
   "/icons/logo.png", "/icons/logo-blanco.png",
   "/icons/icon-192.png", "/icons/icon-512.png",
