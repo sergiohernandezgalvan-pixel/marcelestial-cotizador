@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.08.28";
+const VERSION = "2026.08.30";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -706,10 +706,9 @@ async function imprimirCotizacion(conRecibo = false) {
         ${campo("Capacidad del inversor", t.capinversor)}${campo("Marca del inversor", t.marcainversor)}
       </div>
       ${superficie ? `<p style="font-size:10.5px;color:#6b7280;margin-top:7px;line-height:1.5">
-        La <b>superficie requerida</b> es el área aproximada que ocupa el arreglo, a razón de
-        ${m2Panel} m² por módulo, ya considerando la separación entre hileras. No incluye
-        pasillos de servicio ni áreas que deban dejarse libres por sombras u obstáculos: eso
-        se define en la visita técnica.</p>` : ""}` : ""}
+        <b>Superficie requerida:</b> área aproximada del arreglo, a razón de ${m2Panel} m² por
+        módulo con su separación entre hileras. Pasillos de servicio y áreas libres por sombras
+        se definen en la visita técnica.</p>` : ""}` : ""}
 
       ${(ah.actual || ah.roi) ? `<h2>Análisis de ahorro</h2><div class="campos">
         ${campo("Pago actual a CFE", ah.actual ? money(ah.actual) : "")}
@@ -1099,20 +1098,11 @@ function tablaRecuperacion(c, inversion) {
 }
 
 
-/* ---------------- nueva cotización: rápida o formal ---------------- */
-function menuNueva() {
-  abrirModal("Nueva cotización", `
-    <div class="item" onclick="elegirRapida()">
-      <div class="m"><b>Cotización rápida</b>
-      <span>Pocos datos, precio al instante y PDF básico para el cliente</span></div>
-      <div class="r" style="color:var(--slate);font-size:19px">›</div>
-    </div>
-    <div class="item" onclick="cerrarModal();nuevaCotizacion()">
-      <div class="m"><b>Cotización formal</b>
-      <span>Propuesta completa con detalle técnico y análisis de ahorro</span></div>
-      <div class="r" style="color:var(--slate);font-size:19px">›</div>
-    </div>`);
-}
+/* ---------------- nueva cotización ----------------
+   El botón + abre directo lo que se usa todos los días: la cotización rápida.
+   La formal —empezar de cero, con todos los campos en blanco— sigue estando,
+   pero como una salida discreta al final, no como media pantalla. */
+function menuNueva() { elegirRapida(); }
 
 function elegirRapida() {
   abrirModal("¿Qué vas a cotizar?", Object.entries(LINEAS).map(([k, v]) => `
@@ -1122,8 +1112,45 @@ function elegirRapida() {
         : k === "perfiles" ? "Riel, abrazaderas y tornillería por pieza"
         : "Media tensión, mantenimiento y limpieza"}</span></div>
       <div class="r" style="color:var(--slate);font-size:19px">›</div>
-    </div>`).join(""));
+    </div>`).join("") + `
+    <button class="btn sec sm full" style="margin-top:14px"
+            onclick="cerrarModal();nuevaCotizacion()">Empezar una cotización en blanco</button>
+    <p style="font-size:11px;color:var(--slate);text-align:center;margin-top:8px">
+      Sin plantilla: capturas tú todos los conceptos y el detalle técnico.</p>`);
 }
+
+/* ---- lo que pasa al guardar una rápida ----
+   Antes saltaba directo al PDF. Ahora, cuando es fotovoltaico, se ofrece
+   agregarle la vista del techo: es el único momento en que el vendedor
+   todavía está frente al cliente con la foto en el teléfono. */
+function trasGuardarRapida(cotizacion, esFotovoltaico) {
+  S.editor = { id: cotizacion.id, folio: cotizacion.folio };
+  if (!esFotovoltaico) { setTimeout(imprimirCotizacion, 400); return; }
+  abrirModal("Guardada como " + cotizacion.folio, `
+    <p style="font-size:13px;color:var(--slate);margin-bottom:14px">
+      ¿Le agregas la <b>vista del techo</b>? Subes una foto —de dron, del teléfono o de
+      Google Maps—, marcas las esquinas y la propuesta lleva una hoja con los paneles
+      dibujados sobre el inmueble del cliente.</p>
+    <div class="item" onclick="cerrarModal();irAlTecho()">
+      <div class="m"><b>Marcar el techo</b>
+      <span>Un minuto más y la propuesta entra con imagen</span></div>
+      <div class="r" style="color:var(--slate);font-size:19px">›</div>
+    </div>
+    <div class="item" onclick="cerrarModal();imprimirCotizacion()">
+      <div class="m"><b>Ver el PDF</b>
+      <span>Como siempre. La vista del techo se puede agregar después</span></div>
+      <div class="r" style="color:var(--slate);font-size:19px">›</div>
+    </div>`);
+}
+
+/* Abre la cotización recién guardada y la deja parada en la tarjeta del techo. */
+window.irAlTecho = async () => {
+  await abrirCotizacion(S.editor.id);
+  setTimeout(() => {
+    const t = $("#cardSitio");
+    if (t) t.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, 400);
+};
 
 window.elegirRapida = elegirRapida;
 window.rapida = (linea) => {
@@ -1300,9 +1327,8 @@ async function _guardarRapida() {
       ahorro: ahorroRapida(),
       comentarios: "Estimación rápida. Sujeta a levantamiento técnico en sitio.",
     }});
-    S.editor = { id: cotizacion.id, folio: cotizacion.folio };
     aviso("#rpAviso", "Guardada como " + cotizacion.folio, "ok");
-    setTimeout(imprimirCotizacion, 400);
+    trasGuardarRapida(cotizacion, true);
   } catch (x) { aviso("#rpAviso", x.message); }
 }
 
@@ -1376,13 +1402,15 @@ async function _guardarRapidaCat() {
       cliente_id: cliente, estatus: "borrador", linea: S.rapidaLinea, tipo: "rapida",
       partidas: lista, comentarios: "Estimación rápida. Precios sujetos a confirmación por escrito.",
     }});
-    S.editor = { id: cotizacion.id, folio: cotizacion.folio };
     aviso("#rpAviso", "Guardada como " + cotizacion.folio, "ok");
-    setTimeout(imprimirCotizacion, 400);
+    trasGuardarRapida(cotizacion, S.rapidaLinea === "fotovoltaico");
   } catch (x) { aviso("#rpAviso", x.message); }
 }
 
-Object.assign(window, { menuNueva, rapidaFV, guardarRapida, guardarRapidaCat, calcFV });
+Object.assign(window, {
+  menuNueva, elegirRapida, rapidaFV, guardarRapida, guardarRapidaCat, calcFV,
+  trasGuardarRapida,
+});
 
 
 /* ================= DIMENSIONAMIENTO DESDE EL RECIBO DE CFE =================
@@ -2297,9 +2325,8 @@ async function _guardarRecibo() {
         + "Con base en esa evaluación se determinará la cantidad final de paneles que pueden instalarse de forma segura "
         + "y eficiente, por lo que el alcance y el importe podrán ajustarse.",
     }});
-    S.editor = { id: cotizacion.id, folio: cotizacion.folio };
     aviso("#rcAviso", "Guardada como " + cotizacion.folio, "ok");
-    setTimeout(imprimirCotizacion, 400);
+    trasGuardarRapida(cotizacion, true);
   } catch (x) { aviso("#rcAviso", x.message); }
 }
 
