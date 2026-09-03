@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.08.30";
+const VERSION = "2026.08.31";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -1466,8 +1466,12 @@ function calcularDimensionamiento(e) {
      Si el resultado se sale del rango normal, casi siempre es un dato mal capturado
      (el consumo o el total), así que la app lo avisa antes de que llegue al cliente. */
   const precioKwh = consumo > 0 ? e.pago / consumo : 0;
-  const precioMin = Number(P.precio_kwh_min) || 0;
-  const precioMax = Number(P.precio_kwh_max) || 0;
+  /* El rango normal no es el mismo en todas las tarifas: en media tensión
+     industrial (GDMTO, GDMTH) el kWh sale bastante más barato que en casa o
+     en un negocio chico. Cada tarifa puede traer el suyo; si no, se usa el
+     general de los parámetros del dimensionamiento. */
+  const precioMin = Number(tar.precio_kwh_min) || Number(P.precio_kwh_min) || 0;
+  const precioMax = Number(tar.precio_kwh_max) || Number(P.precio_kwh_max) || 0;
   const precioFueraDeRango = consumo > 0 && e.pago > 0 && precioMin > 0 && precioMax > 0
     && (precioKwh < precioMin || precioKwh > precioMax);
   const consumoDia = consumo / dias;
@@ -2390,7 +2394,8 @@ function formTarifas() {
   abrirModal("Tarifas y precio por panel", `
     <p style="font-size:12.5px;color:var(--slate);margin-bottom:14px">
       El precio se resuelve por tarifa, tensión y cantidad de módulos. "Hasta" es el tope de
-      módulos de ese escalón.</p>
+      módulos de ese escalón. Cada tarifa lleva además su propio rango normal de precio por
+      kWh: el de media tensión es más bajo que el de casa o negocio.</p>
     <form id="fTar">
       ${lista.map((t, i) => `
         <div class="card" style="box-shadow:none;margin-bottom:10px">
@@ -2407,6 +2412,15 @@ function formTarifas() {
             <input name="t${i}_cargo" type="number" step="0.01" value="${Number(t.cargo_fijo) || 0}">
             <small style="font-size:11px;color:var(--slate)">Lo que CFE sigue cobrando aunque el
               sistema cubra todo el consumo. Se imprime en la cotización.</small></label>
+          <div class="grid2" style="gap:8px">
+            <label class="f" style="margin:0"><span>Precio kWh mínimo</span>
+              <input name="t${i}_pmin" type="number" step="0.1" value="${Number(t.precio_kwh_min) || 0}"></label>
+            <label class="f" style="margin:0"><span>Precio kWh máximo</span>
+              <input name="t${i}_pmax" type="number" step="0.1" value="${Number(t.precio_kwh_max) || 0}"></label>
+          </div>
+          <small style="font-size:11px;color:var(--slate);display:block;margin:-4px 0 10px">
+            Si el precio del recibo sale fuera de este rango, la app avisa que revisen la captura.
+            En cero, se usa el rango general de los parámetros del dimensionamiento.</small>
           ${(t.escalones || []).map((e, j) => `
             <div class="grid3" style="gap:8px;margin-bottom:6px">
               <label class="f" style="margin:0"><span>Tensión</span>
@@ -2426,6 +2440,7 @@ function formTarifas() {
       ...t,
       uvie: !!d[`t${i}_uvie`], gestion: !!d[`t${i}_gestion`], horaria: !!d[`t${i}_horaria`],
       cargo_fijo: numero(d[`t${i}_cargo`]),
+      precio_kwh_min: numero(d[`t${i}_pmin`]), precio_kwh_max: numero(d[`t${i}_pmax`]),
       escalones: (t.escalones || []).map((e, j) => ({
         tension: d[`t${i}e${j}_tension`],
         hasta: numero(d[`t${i}e${j}_hasta`]),
