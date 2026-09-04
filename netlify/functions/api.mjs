@@ -37,10 +37,20 @@ function areaValida(v) {
   if (!entre(filas, 1, 60) || !entre(columnas, 1, 60)) return null;
   /* Los módulos que el vendedor fijó a mano para esta área. Cero = automático. */
   const paneles = Math.round(Number(v.paneles));
+  /* El acomodo a mano: cuánto se corrió el arreglo dentro del área y qué
+     casillas se quitaron porque ahí hay un domo, un extractor o una tubería.
+     Se limita a lo que puede caber para que no entre basura al dibujo. */
+  const corr = (x) => (Number.isFinite(Number(x)) && Math.abs(Number(x)) <= 500 ? Number(x) : 0);
+  const quitados = (Array.isArray(v.quitados) ? v.quitados : [])
+    .filter((k) => typeof k === "string" && /^\d{1,3},\d{1,3}$/.test(k))
+    .slice(0, 3600);
   return {
     esquinas: puntos, ancho_m: ancho, fondo_m: fondo, filas, columnas,
     giro: v.giro === true,
     paneles: entre(paneles, 1, 3000) ? paneles : 0,
+    mano: v.mano === true,
+    off_x: corr(v.off_x), off_y: corr(v.off_y),
+    quitados: [...new Set(quitados)],
   };
 }
 

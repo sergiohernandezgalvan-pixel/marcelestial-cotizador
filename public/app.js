@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.09.01";
+const VERSION = "2026.09.03";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -458,9 +458,14 @@ function editor() {
         <p class="sitio-paso" id="sitioPaso"></p>
         <canvas id="sitioLienzo" class="sitio-lienzo"></canvas>
         <div class="acciones" style="margin:10px 0">
-          <button class="btn sec sm" type="button" onclick="reiniciarEsquinas()">Volver a marcar</button>
+          <button class="btn sec sm" type="button" id="btnRemarcar"
+                  onclick="reiniciarEsquinas()">Volver a marcar</button>
           <button class="btn sec sm" type="button" id="btnArea" onclick="agregarArea()">
             Agregar otra área</button>
+          <button class="btn pri sm" type="button" id="btnAcomodar" hidden
+                  onclick="modoAcomodar()">Acomodar los paneles</button>
+          <button class="btn sec sm" type="button" id="btnMarcar" hidden
+                  onclick="modoMarcar()">Volver a las esquinas</button>
           <button class="btn sec sm" type="button" onclick="document.getElementById('edSitioFoto').click()">
             Cambiar foto</button>
           <button class="btn dan sm" type="button" onclick="quitarSitio()">Quitar</button>
@@ -525,11 +530,24 @@ function editor() {
       }
     : null;
   S.edSitioImagen = null;
+  S.edSitioModo = "marcar";
+  S.edSitioArrastre = null;
+  S.edSitioCeldas = [];
   $("#edSitioFoto")?.addEventListener("change", tomarFotoSitio);
   const lz = $("#sitioLienzo");
   if (lz) {
-    lz.addEventListener("click", tocarLienzo);
-    lz.addEventListener("touchstart", (ev) => { ev.preventDefault(); tocarLienzo(ev); }, { passive: false });
+    /* Marcar esquinas: un toque. Acomodar: arrastrar o tocar un módulo. */
+    lz.addEventListener("click", (ev) => { if (S.edSitioModo !== "acomodar") tocarLienzo(ev); });
+    lz.addEventListener("touchstart", (ev) => {
+      if (S.edSitioModo === "acomodar") { empezarToque(ev); return; }
+      ev.preventDefault(); tocarLienzo(ev);
+    }, { passive: false });
+    lz.addEventListener("touchmove", moverToque, { passive: false });
+    lz.addEventListener("touchend", soltarToque);
+    lz.addEventListener("touchcancel", soltarToque);
+    lz.addEventListener("mousedown", empezarToque);
+    lz.addEventListener("mousemove", moverToque);
+    window.addEventListener("mouseup", soltarToque);
   }
   if (S.edSitio && $("#sitioSatelite")) $("#sitioSatelite").checked = S.edSitio.fuente === "satelite";
   $("#sitioSatelite")?.addEventListener("change", (ev) => {
@@ -1762,6 +1780,7 @@ async function tomarFotoSitio(ev) {
     S.edSitioFuente = null;
     S.edSitioFoto = datos;
     S.edSitio = { fuente, areas: [areaVacia()] };
+    S.edSitioModo = "marcar";
     await pintarSitio();
     if ($("#sitioSatelite")) $("#sitioSatelite").checked = fuente === "satelite";
     aviso("#edAviso", "Ahora toca las cuatro esquinas del techo, en orden.", "ok");
@@ -1841,6 +1860,17 @@ async function pintarSitio() {
 
   const areas = areasEd();
   const activa = areaActiva();
+
+  /* Con las esquinas puestas y las medidas capturadas, el recuadro deja de
+     servir para marcar y pasa a servir para acomodar los paneles. */
+  if (S.edSitioModo === "acomodar" && listoParaAcomodar()) {
+    pintarAcomodo(ctx, esc, areas);
+    pintarAreas();
+    calcularCaben();
+    actualizarBotonesSitio();
+    return;
+  }
+
   areas.forEach((area, ia) => {
     const e = area.esquinas || [];
     const color = COLOR_AREA[ia % COLOR_AREA.length];
@@ -1886,15 +1916,55 @@ async function pintarSitio() {
 
   pintarAreas();
   calcularCaben();
+  actualizarBotonesSitio();
 }
 
 /* La lista de áreas con sus medidas. Se redibuja sólo cuando cambia el número
    de áreas o sus esquinas, nunca al teclear: así no se pierde el cursor. */
+/* Los botones para mover, quitar y girar, dentro de la tarjeta de cada área. */
+function controlesAcomodo(a, i) {
+  const ac = acomodoEfectivo(i);
+  const t = topesDeArea({ ...a, giro: ac.giro });
+  const quitados = (a.quitados || []).length;
+  const dibujados = a.mano ? MCSitio.cuantosEnRejilla({ ...a, ...ac })
+                           : ac.filas * ac.columnas;
+  const b = (campo, paso, txt, activo) =>
+    `<button class="btn sec sm" type="button" ${activo ? "" : "disabled"}
+             onclick="cambiarRejilla(${i},'${campo}',${paso})">${txt}</button>`;
+  return `
+    <div class="acomodo">
+      <div class="acomodo-fila">
+        <span>Hileras</span>
+        ${b("filas", -1, "−", ac.filas > 1)}
+        <b id="sitioFil${i}">${ac.filas}</b>
+        ${b("filas", 1, "+", ac.filas < t.maxFil)}
+      </div>
+      <div class="acomodo-fila">
+        <span>Por hilera</span>
+        ${b("columnas", -1, "−", ac.columnas > 1)}
+        <b id="sitioCol${i}">${ac.columnas}</b>
+        ${b("columnas", 1, "+", ac.columnas < t.maxCol)}
+      </div>
+      <div class="acciones" style="margin-top:4px">
+        <button class="btn sec sm" type="button" onclick="girarRejilla(${i})">
+          ${ac.giro ? "Poner acostados" : "Poner parados"}</button>
+        <button class="btn sec sm" type="button" onclick="centrarRejilla(${i})">Centrar</button>
+        ${a.mano ? `<button class="btn sec sm" type="button"
+                            onclick="autoRejilla(${i})">Volver a automático</button>` : ""}
+      </div>
+      <p class="sitio-nota" style="margin:8px 0 0">
+        <b>${dibujados}</b> módulos dibujados en esta área${
+          quitados ? ` · ${quitados} quitado${quitados === 1 ? "" : "s"} a mano` : ""}.
+        ${a.mano ? "" : "Se está acomodando sola; en cuanto la toques, manda lo que tú pongas."}</p>
+    </div>`;
+}
+
 function pintarAreas() {
   const caja = $("#sitioAreas");
   if (!caja) return;
   const areas = areasEd();
   const uno = areas.length === 1;
+  const acomodando = S.edSitioModo === "acomodar" && listoParaAcomodar();
   caja.innerHTML = areas.map((a, i) => `
     <div class="sitio-area">
       <div class="sitio-area-t">
@@ -1912,11 +1982,11 @@ function pintarAreas() {
                  id="sitioFondo${i}" data-area="${i}" data-campo="fondo_m"
                  value="${a.fondo_m || ""}"></label>
       </div>
-      ${uno ? "" : `
+      ${acomodando ? controlesAcomodo(a, i) : (uno ? "" : `
       <label class="f"><span>Módulos en esta área</span>
         <input type="number" step="1" min="0" inputmode="numeric"
                id="sitioPan${i}" data-area="${i}" data-campo="paneles"
-               placeholder="automático" value="${a.paneles || ""}"></label>`}
+               placeholder="automático" value="${a.paneles || ""}"></label>`)}
     </div>`).join("");
   caja.oninput = (ev) => {
     const el = ev.target;
@@ -1928,22 +1998,260 @@ function pintarAreas() {
   };
 }
 
-function tocarLienzo(ev) {
-  const i = areaActiva();
-  if (i < 0) return;
+/* Del toque en pantalla a coordenadas de la foto original. */
+function puntoEnFoto(ev) {
   const lienzo = $("#sitioLienzo");
   const r = lienzo.getBoundingClientRect();
   const t = ev.touches && ev.touches[0] ? ev.touches[0] : ev;
-  const x = (t.clientX - r.left) * (lienzo.width / r.width) / S.edSitioEscala;
-  const y = (t.clientY - r.top) * (lienzo.height / r.height) / S.edSitioEscala;
+  return [(t.clientX - r.left) * (lienzo.width / r.width) / S.edSitioEscala,
+          (t.clientY - r.top) * (lienzo.height / r.height) / S.edSitioEscala];
+}
+
+function tocarLienzo(ev) {
+  const i = areaActiva();
+  if (i < 0) return;
+  const [x, y] = puntoEnFoto(ev);
   areasEd()[i].esquinas.push([Math.round(x), Math.round(y)]);
   pintarSitio();
+}
+
+/* =======================================================================
+   Acomodar los paneles a mano
+   El vendedor arrastra el bloque dentro del área, le cambia filas y
+   columnas, lo gira, y toca un módulo para quitarlo cuando ahí hay un
+   domo o un extractor. Los paneles siguen en cuadrícula: así el dibujo
+   corresponde a algo que sí se puede instalar y la cuenta cuadra.
+   ===================================================================== */
+
+/* Se puede acomodar cuando todas las áreas están marcadas y medidas. */
+function listoParaAcomodar() {
+  const areas = areasEd();
+  return areas.length > 0 && areas.every((a) =>
+    (a.esquinas || []).length === 4 && Number(a.ancho_m) > 0 && Number(a.fondo_m) > 0);
+}
+
+/* La matriz de esa área, en coordenadas de la foto original. */
+function hDeArea(a) {
+  const e = a.esquinas || [];
+  const A = Number(a.ancho_m) || 0, F = Number(a.fondo_m) || 0;
+  if (e.length !== 4 || !(A > 0) || !(F > 0)) return null;
+  return MCSitio.homografia([[0, 0], [A, 0], [A, F], [0, F]], e.map(([x, y]) => [x, y]));
+}
+
+/* Cuántas filas y columnas caben a tamaño real, sin encoger los módulos. */
+function topesDeArea(a) {
+  const margen = 0.6, sep = 0.03;
+  const pa = a.giro ? 1.13 : 2.28, pl = a.giro ? 2.28 : 1.13;
+  const cab = (t, m) => Math.max(Math.floor((Number(t) - 2 * margen + sep) / (m + sep)), 0);
+  return { maxCol: cab(a.ancho_m, pa), maxFil: cab(a.fondo_m, pl) };
+}
+
+/* El acomodo que se ve hoy: el de a mano si lo hay, si no el automático. */
+function acomodoEfectivo(i) {
+  const a = areasEd()[i];
+  if (!a) return { filas: 0, columnas: 0, giro: false };
+  if (a.mano) return { filas: a.filas, columnas: a.columnas, giro: !!a.giro };
+  const rep = MCSitio.repartir(areasEd(), Number(leerTecnico().paneles) || 0);
+  const ac = MCSitio.acomodo(Number(a.ancho_m) || 0, Number(a.fondo_m) || 0, rep.asignado[i]);
+  return { filas: ac.filas, columnas: ac.columnas, giro: ac.giro };
+}
+
+/* En cuanto el vendedor toca un área, esa área deja de ser automática y se
+   queda con lo que él decida. Las demás siguen calculándose solas. */
+function fijarAMano(i) {
+  const a = areasEd()[i];
+  if (!a) return null;
+  if (!a.mano) {
+    const ac = acomodoEfectivo(i);
+    a.filas = ac.filas; a.columnas = ac.columnas; a.giro = !!ac.giro;
+    a.off_x = 0; a.off_y = 0; a.quitados = [];
+    a.mano = true;
+  }
+  return a;
+}
+
+/* Después de cualquier cambio a mano, los módulos de esa área son los que
+   quedaron dibujados: ni uno más. */
+function recontarArea(a) { a.paneles = MCSitio.cuantosEnRejilla(a); }
+
+const dentroDe = (px, py, poly) => {
+  let d = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) d = !d;
+  }
+  return d;
+};
+
+/* Dibuja el arreglo de cada área sobre la foto, listo para tocarlo. */
+function pintarAcomodo(ctx, esc, areas) {
+  const cot = Number(leerTecnico().paneles) || 0;
+  const rep = MCSitio.repartir(areas, cot);
+  S.edSitioCeldas = [];
+
+  areas.forEach((a, ia) => {
+    const color = COLOR_AREA[ia % COLOR_AREA.length];
+    const e = a.esquinas || [];
+    ctx.beginPath();
+    e.forEach(([x, y], i) => (i ? ctx.lineTo(x * esc, y * esc) : ctx.moveTo(x * esc, y * esc)));
+    ctx.closePath();
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+
+    const H = hDeArea({ ...a, ...acomodoEfectivo(ia) });
+    if (!H) return;
+    const { celdas } = MCSitio.rejilla({ ...a, ...acomodoEfectivo(ia) });
+    const tope = rep.asignado[ia];
+    let n = 0;
+    for (const k of celdas) {
+      const q = MCSitio.cuadroDeCelda(H, k).map(([x, y]) => [x * esc, y * esc]);
+      const cabe = !k.fuera && (tope <= 0 || n < tope);
+      ctx.beginPath();
+      ctx.moveTo(q[0][0], q[0][1]);
+      for (let i = 1; i < 4; i++) ctx.lineTo(q[i][0], q[i][1]);
+      ctx.closePath();
+      if (cabe) {
+        ctx.fillStyle = "rgba(20,33,60,.88)"; ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,.85)"; ctx.lineWidth = 1; ctx.setLineDash([]);
+        ctx.stroke();
+        n++;
+      } else {
+        ctx.fillStyle = "rgba(255,255,255,.18)"; ctx.fill();
+        ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
+        ctx.stroke(); ctx.setLineDash([]);
+      }
+      /* se guarda en coordenadas de la foto para poder tocarlo después */
+      S.edSitioCeldas.push({ ia, f: k.f, c: k.c, poly: MCSitio.cuadroDeCelda(H, k) });
+    }
+  });
+
+  const paso = $("#sitioPaso");
+  if (paso) paso.textContent = areas.length > 1
+    ? "Arrastra cada arreglo para moverlo. Toca un módulo para quitarlo o regresarlo."
+    : "Arrastra el arreglo para moverlo. Toca un módulo para quitarlo o regresarlo.";
+}
+
+/* ---------- el dedo sobre el lienzo ---------- */
+function empezarToque(ev) {
+  if (S.edSitioModo !== "acomodar" || !listoParaAcomodar()) return;
+  const [x, y] = puntoEnFoto(ev);
+  const celda = (S.edSitioCeldas || []).find((k) => dentroDe(x, y, k.poly));
+  const ia = celda ? celda.ia
+    : areasEd().findIndex((a) => dentroDe(x, y, (a.esquinas || []).map(([u, v]) => [u, v])));
+  if (ia < 0) return;
+  ev.preventDefault();
+  const a = fijarAMano(ia);
+  const Hinv = MCSitio.invertirH(hDeArea(a));
+  if (!Hinv) return;
+  S.edSitioArrastre = {
+    ia, celda, Hinv, movido: false,
+    origen: MCSitio.aMetros(Hinv, x, y),
+    off: [Number(a.off_x) || 0, Number(a.off_y) || 0],
+  };
+}
+
+function moverToque(ev) {
+  const d = S.edSitioArrastre;
+  if (!d) return;
+  ev.preventDefault();
+  const [x, y] = puntoEnFoto(ev);
+  const p = MCSitio.aMetros(d.Hinv, x, y);
+  const dx = p[0] - d.origen[0], dy = p[1] - d.origen[1];
+  if (Math.abs(dx) < 0.12 && Math.abs(dy) < 0.12 && !d.movido) return;
+  d.movido = true;
+  const a = areasEd()[d.ia];
+  a.off_x = d.off[0] + dx; a.off_y = d.off[1] + dy;
+  pintarSitio();
+}
+
+function soltarToque() {
+  const d = S.edSitioArrastre;
+  S.edSitioArrastre = null;
+  if (!d) return;
+  const a = areasEd()[d.ia];
+  if (!d.movido && d.celda) {
+    /* fue un toque, no un arrastre: se quita o se regresa ese módulo */
+    const llave = d.celda.f + "," + d.celda.c;
+    const q = Array.isArray(a.quitados) ? a.quitados : (a.quitados = []);
+    const i = q.indexOf(llave);
+    if (i >= 0) q.splice(i, 1); else q.push(llave);
+  }
+  recontarArea(a);
+  pintarSitio();
+}
+
+/* ---------- los botones de cada área ---------- */
+window.cambiarRejilla = (i, campo, paso) => {
+  const a = fijarAMano(i);
+  if (!a) return;
+  const t = topesDeArea(a);
+  const max = campo === "filas" ? t.maxFil : t.maxCol;
+  const v = Math.max(1, Math.min(Math.round(Number(a[campo]) || 0) + paso, max));
+  if (v === a[campo]) return;
+  a[campo] = v;
+  a.quitados = (a.quitados || []).filter((k) => {
+    const [f, c] = k.split(",").map(Number);
+    return f < a.filas && c < a.columnas;
+  });
+  recontarArea(a);
+  pintarSitio();
+};
+
+window.girarRejilla = (i) => {
+  const a = fijarAMano(i);
+  if (!a) return;
+  a.giro = !a.giro;
+  const t = topesDeArea(a);
+  a.filas = Math.max(1, Math.min(Number(a.filas) || 1, t.maxFil));
+  a.columnas = Math.max(1, Math.min(Number(a.columnas) || 1, t.maxCol));
+  a.quitados = [];
+  recontarArea(a);
+  pintarSitio();
+};
+
+window.centrarRejilla = (i) => {
+  const a = fijarAMano(i);
+  if (!a) return;
+  a.off_x = 0; a.off_y = 0;
+  pintarSitio();
+};
+
+window.autoRejilla = (i) => {
+  const a = areasEd()[i];
+  if (!a) return;
+  a.mano = false; a.off_x = 0; a.off_y = 0; a.quitados = []; a.paneles = 0;
+  pintarSitio();
+};
+
+window.modoAcomodar = () => {
+  if (!listoParaAcomodar())
+    return aviso("#edAviso", "Primero marca las cuatro esquinas y captura las medidas.");
+  S.edSitioModo = "acomodar";
+  pintarSitio();
+};
+
+window.modoMarcar = () => {
+  S.edSitioModo = "marcar";
+  pintarSitio();
+};
+
+function actualizarBotonesSitio() {
+  const acomodando = S.edSitioModo === "acomodar" && listoParaAcomodar();
+  const b1 = $("#btnAcomodar"), b2 = $("#btnMarcar"), b3 = $("#btnArea"), b4 = $("#btnRemarcar");
+  if (b1) b1.hidden = acomodando || !listoParaAcomodar();
+  if (b2) b2.hidden = !acomodando;
+  if (b3) b3.hidden = acomodando || areasEd().length >= MCSitio.TOPE_AREAS;
+  if (b4) b4.hidden = acomodando;
+  const lz = $("#sitioLienzo");
+  if (lz) lz.style.cursor = acomodando ? "grab" : "crosshair";
 }
 
 /* Cuántos módulos caben con las medidas capturadas, contra los cotizados. */
 function calcularCaben() {
   const nota = $("#sitioCaben");
   if (!nota || !S.edSitio) return;
+  /* las medidas se teclean sin repintar el lienzo, así que los botones
+     —entre ellos el de acomodar— se refrescan desde aquí */
+  actualizarBotonesSitio();
   const areas = areasEd();
   const cotizados = Number(leerTecnico().paneles) || 0;
   const conMedidas = areas.filter((a) => Number(a.ancho_m) > 0 && Number(a.fondo_m) > 0);
@@ -1955,8 +2263,11 @@ function calcularCaben() {
     return;
   }
   const rep = MCSitio.repartir(areas, cotizados);
-  /* el acomodo de cada área se guarda para que el dibujo no lo recalcule mal */
+  /* El acomodo de cada área se guarda para que el dibujo no lo recalcule mal.
+     Las que el vendedor acomodó a mano NO se tocan: si no, cada vez que se
+     repinta el lienzo se le borrarían las hileras y los módulos quitados. */
   areas.forEach((a, i) => {
+    if (a.mano) return;
     const ac = MCSitio.acomodo(Number(a.ancho_m), Number(a.fondo_m), rep.asignado[i]);
     a.filas = ac.filas; a.columnas = ac.columnas; a.giro = ac.giro;
   });
@@ -1974,7 +2285,7 @@ function calcularCaben() {
          módulos y la cotización trae <b>${cotizados}</b>. Se dibujarán
          ${rep.total}${detalle}; revisa las medidas o el número de paneles.`
       : `⚠ Se dibujarán <b>${rep.total}</b> de los <b>${cotizados}</b> cotizados${detalle}.
-         ${aMano ? "El reparto que escribiste a mano deja fuera "
+         ${aMano ? "El acomodo que hiciste a mano deja fuera "
                  : "No alcanza el espacio para "}${cotizados - rep.total} módulos.`;
     nota.className = "sitio-nota mal";
   } else {

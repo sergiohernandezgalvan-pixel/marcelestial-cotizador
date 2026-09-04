@@ -212,6 +212,14 @@ textarea{min-height:84px;resize:vertical}
 .sitio-area .campos{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 #sitioAreas .f{margin-bottom:0}
 
+/* acomodar los paneles a mano */
+.acomodo{margin-top:4px}
+.acomodo-fila{display:flex;align-items:center;gap:10px;margin-bottom:7px}
+.acomodo-fila>span{font-size:11.5px;font-weight:700;color:var(--slate);
+  text-transform:uppercase;letter-spacing:.05em;flex:1;min-width:0}
+.acomodo-fila>b{font-size:16px;font-weight:800;min-width:28px;text-align:center}
+.acomodo-fila .btn{min-width:42px;padding:7px 0;font-size:17px;line-height:1}
+
 /* la hoja del techo dentro del documento imprimible.
    Empieza en página nueva, igual que el anexo y la recuperación: si no,
    el encabezado se queda al pie de la hoja anterior y el montaje se va solo. */

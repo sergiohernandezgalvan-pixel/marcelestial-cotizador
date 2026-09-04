@@ -47,6 +47,28 @@ const proyectar = (H, x, y) => {
           (H[1][0] * x + H[1][1] * y + H[1][2]) / w];
 };
 
+/* La vuelta: de un punto de la imagen a metros sobre el techo. Se ocupa para
+   arrastrar el arreglo con el dedo. */
+function invertirH(H) {
+  const m = [H[0], H[1], H[2]];
+  const d = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+          - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+          + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+  if (!isFinite(d) || Math.abs(d) < 1e-12) return null;
+  const c = (a, b) => m[(a + 1) % 3][(b + 1) % 3] * m[(a + 2) % 3][(b + 2) % 3]
+                    - m[(a + 1) % 3][(b + 2) % 3] * m[(a + 2) % 3][(b + 1) % 3];
+  const inv = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) inv[j][i] = c(i, j) / d;
+  return inv;
+}
+
+/* Punto de la imagen -> metros. Devuelve [x, y] sobre el plano del techo. */
+function aMetros(Hinv, u, v) {
+  const w = Hinv[2][0] * u + Hinv[2][1] * v + Hinv[2][2];
+  return [(Hinv[0][0] * u + Hinv[0][1] * v + Hinv[0][2]) / w,
+          (Hinv[1][0] * u + Hinv[1][1] * v + Hinv[1][2]) / w];
+}
+
 /* ---------- cuántos módulos caben, y en qué acomodo ----------
    Devuelve el mejor acomodo que no pase del número de paneles cotizados. */
 function acomodo(anchoM, fondoM, cuantos, panelAncho = 2.28, panelAlto = 1.13, margen = 0.6, sep = 0.03) {
@@ -118,24 +140,60 @@ function repartir(areas, cotizados) {
   };
 }
 
-/* ---------- el dibujo ---------- */
-function dibujarModulos(ctx, H, sitio, cuantos) {
-  const { ancho_m: A, fondo_m: F, filas, columnas, giro } = sitio;
+/* ---------- la cuadrícula de un área, en metros ----------
+   Una sola función arma las casillas: la usan el dibujo, el acomodo a mano y
+   el toque en pantalla, así que los tres ven exactamente lo mismo.
+   El arreglo va centrado en el área y se corre con off_x / off_y, sin poder
+   salirse del techo. Las casillas listadas en "quitados" no se dibujan. */
+function rejilla(area) {
+  const A = Number(area.ancho_m) || 0, F = Number(area.fondo_m) || 0;
+  const filas = Math.max(Math.round(Number(area.filas) || 0), 0);
+  const columnas = Math.max(Math.round(Number(area.columnas) || 0), 0);
+  if (!(A > 0) || !(F > 0) || !filas || !columnas) return { celdas: [], px: 0, py: 0 };
+
   const margen = 0.6, sep = 0.03;
-  const pa = giro ? 1.13 : 2.28, pl = giro ? 2.28 : 1.13;
+  const pa = area.giro ? 1.13 : 2.28, pl = area.giro ? 2.28 : 1.13;
   const px = Math.min((A - 2 * margen - (columnas - 1) * sep) / columnas, pa);
   const py = Math.min((F - 2 * margen - (filas - 1) * sep) / filas, pl);
-  if (!(px > 0) || !(py > 0)) return 0;
-  const x0 = (A - (columnas * px + (columnas - 1) * sep)) / 2;
-  const y0 = (F - (filas * py + (filas - 1) * sep)) / 2;
+  if (!(px > 0) || !(py > 0)) return { celdas: [], px: 0, py: 0 };
 
+  const anchoTotal = columnas * px + (columnas - 1) * sep;
+  const fondoTotal = filas * py + (filas - 1) * sep;
+  const tope = (v, max) => Math.min(Math.max(v, 0), Math.max(max, 0));
+  const x0 = tope((A - anchoTotal) / 2 + (Number(area.off_x) || 0), A - anchoTotal);
+  const y0 = tope((F - fondoTotal) / 2 + (Number(area.off_y) || 0), F - fondoTotal);
+
+  const fuera = new Set(Array.isArray(area.quitados) ? area.quitados : []);
+  const celdas = [];
+  for (let f = 0; f < filas; f++)
+    for (let c = 0; c < columnas; c++)
+      celdas.push({
+        f, c, fuera: fuera.has(f + "," + c),
+        x: x0 + c * (px + sep), y: y0 + f * (py + sep), px, py,
+      });
+  return { celdas, px, py, x0, y0, anchoTotal, fondoTotal };
+}
+
+/* Cuántos módulos deja la cuadrícula después de quitar los que estorban. */
+function cuantosEnRejilla(area) {
+  return rejilla(area).celdas.filter((c) => !c.fuera).length;
+}
+
+/* Las cuatro esquinas de una casilla, ya proyectadas sobre la imagen. */
+function cuadroDeCelda(H, k) {
+  return [proyectar(H, k.x, k.y), proyectar(H, k.x + k.px, k.y),
+          proyectar(H, k.x + k.px, k.y + k.py), proyectar(H, k.x, k.y + k.py)];
+}
+
+/* ---------- el dibujo ---------- */
+function dibujarModulos(ctx, H, sitio, cuantos) {
+  const { celdas } = rejilla(sitio);
   let n = 0;
-  for (let f = 0; f < filas; f++) {
-    for (let c = 0; c < columnas; c++) {
+  for (const celda of celdas) {
+    {
+      if (celda.fuera) continue;
       if (cuantos > 0 && n >= cuantos) break;
-      const ax = x0 + c * (px + sep), ay = y0 + f * (py + sep);
-      const q = [proyectar(H, ax, ay), proyectar(H, ax + px, ay),
-                 proyectar(H, ax + px, ay + py), proyectar(H, ax, ay + py)];
+      const q = cuadroDeCelda(H, celda);
 
       ctx.beginPath();
       ctx.moveTo(q[0][0] + 3, q[0][1] + 4);
@@ -339,7 +397,10 @@ async function generarVistaSitio(foto, sitio, tecnico, logoUrl) {
     /* Un área a la que no le tocó ningún módulo se queda vacía. Sin esto,
        dibujarModulos entendería el cero como «sin límite» y la llenaría. */
     if (!rep.asignado[i]) return;
-    const ac = acomodo(A, F, rep.asignado[i]);
+    /* Si el vendedor acomodó a mano, manda su cuadrícula; si no, la automática. */
+    const ac = area.mano
+      ? { filas: area.filas, columnas: area.columnas, giro: !!area.giro }
+      : acomodo(A, F, rep.asignado[i]);
     const n = dibujarModulos(ctx, H, { ...area, ancho_m: A, fondo_m: F, ...ac }, rep.asignado[i]);
     dibujados += n;
     if (n) etiquetas.push({ puntos: destino, texto: `${n} módulos` });
@@ -374,4 +435,5 @@ function cargarImagen(src) {
 window.MCSitio = {
   generarVistaSitio, acomodo, homografia, proyectar,
   areasDe, repartir, KWH_KWP_DIA, TOPE_AREAS,
+  rejilla, cuantosEnRejilla, cuadroDeCelda, invertirH, aMetros,
 };
