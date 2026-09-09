@@ -1,7 +1,8 @@
 import {
-  db, json, err, hashPassword, verifyPassword, signToken,
-  sesion, esDueno, num, limpio, siguienteFolio, ultimoFolio, conFolio,
-  totalDePartidas, fotoValida, claveNombre, claveRpu,
+  db, json, err, hashPassword, verifyPassword, signToken, problemaDeLlave,
+  sesion, esDueno, esAlmacen, esVendedor, mueveAlmacen, ROLES,
+  num, limpio, siguienteFolio, ultimoFolio, conFolio, siguienteFolioVale,
+  totalDePartidas, fotoValida, firmaValida, claveNombre, claveRpu,
 } from "../lib/core.mjs";
 
 /* Busca un cliente que ya exista con el mismo nombre (sin acentos ni signos) o
@@ -113,6 +114,36 @@ async function clienteRepetido(nombre, referencia, excluirId = 0) {
      (rpu && rpu.length >= 5 && claveRpu(c.referencia) === rpu))) || null;
 }
 
+/* Mapa clave → concepto, para casar las partidas de una cotización con el
+   catálogo de inventario. */
+const porClaveInv = (filas) => filas.map((i) => [String(i.clave).toUpperCase(), i]);
+
+/* Un vale con sus renglones, su cliente, su cotización y quién lo capturó:
+   lo que la app pinta en la ficha y en el documento imprimible. */
+async function valeCompleto(id) {
+  const [v] = await db.sql`
+    SELECT v.*, v.fecha::text AS fecha, cl.nombre AS cliente, cl.telefono AS cliente_telefono, cl.direccion AS cliente_direccion,
+           cl.contacto AS cliente_contacto,
+           q.folio AS cotizacion, q.tecnico->>'ubicacion' AS cotizacion_ubicacion,
+           u.nombre AS capturo, cu.nombre AS cancelo, o.folio AS vale_origen
+      FROM vales v
+      LEFT JOIN clientes cl ON cl.id = v.cliente_id
+      LEFT JOIN cotizaciones q ON q.id = v.cotizacion_id
+      LEFT JOIN usuarios u ON u.id = v.usuario_id
+      LEFT JOIN usuarios cu ON cu.id = v.cancelado_por
+      LEFT JOIN vales o ON o.id = v.vale_origen_id
+     WHERE v.id = ${id}`;
+  if (!v) return null;
+  /* Sólo los renglones del vale en sí, no los de su cancelación (que también
+     apuntan al vale, pero con el tipo contrario). */
+  const partidas = await db.sql`
+    SELECT m.id, m.item_id, m.tipo, m.cantidad, m.saldo, c.clave, c.descripcion, c.unidad
+      FROM movimientos m JOIN catalogo c ON c.id = m.item_id
+     WHERE m.vale_id = ${id} AND m.tipo = ${v.tipo}
+     ORDER BY CASE c.categoria WHEN 'perfil' THEN 0 ELSE 1 END, c.clave`;
+  return { ...v, partidas };
+}
+
 export const config = { path: "/api/*" };
 
 export default async (req) => {
@@ -124,6 +155,11 @@ export default async (req) => {
     : {};
 
   try {
+    /* Sin llave de sesiones no se trabaja. Mejor un aviso claro que una app
+       que parece funcionar con una llave que cualquiera conoce. */
+    const sinLlave = problemaDeLlave();
+    if (sinLlave) return err(sinLlave, 500);
+
     /* ============ ARRANQUE / SESIÓN ============ */
     if (ruta === "estado" && metodo === "GET") {
       const [r] = await db.sql`SELECT COUNT(*)::int AS n FROM usuarios`;
@@ -145,11 +181,40 @@ export default async (req) => {
       return json({ token: signToken({ uid: u.id }), usuario: u });
     }
 
+    /* Freno a la fuerza bruta: 5 fallos seguidos bloquean la cuenta 15 minutos.
+       El mensaje de credenciales incorrectas es el MISMO exista o no el correo,
+       para no confirmarle a nadie qué cuentas están dadas de alta. */
     if (ruta === "login" && metodo === "POST") {
+      const MAX_INTENTOS = 5, MINUTOS_BLOQUEO = 15;
       const correo = limpio(cuerpo.correo, 120)?.toLowerCase();
       const [u] = await db.sql`SELECT * FROM usuarios WHERE correo = ${correo} LIMIT 1`;
-      if (!u || !u.activo || !verifyPassword(cuerpo.password || "", u.password_hash))
+
+      if (u?.bloqueado_hasta && new Date(u.bloqueado_hasta) > new Date()) {
+        const faltan = Math.max(1, Math.ceil((new Date(u.bloqueado_hasta) - new Date()) / 60000));
+        return err(
+          `Demasiados intentos fallidos. Vuelve a intentar en ${faltan} ` +
+          `${faltan === 1 ? "minuto" : "minutos"}, o pídele al administrador que te cambie la contraseña.`,
+          429
+        );
+      }
+
+      if (!u || !u.activo || !verifyPassword(cuerpo.password || "", u.password_hash)) {
+        if (u) {
+          const fallos = Number(u.intentos_fallidos || 0) + 1;
+          await db.sql`
+            UPDATE usuarios SET
+              intentos_fallidos = ${fallos},
+              bloqueado_hasta   = ${fallos >= MAX_INTENTOS
+                                     ? new Date(Date.now() + MINUTOS_BLOQUEO * 60000).toISOString()
+                                     : null}
+            WHERE id = ${u.id}`;
+        }
         return err("Correo o contraseña incorrectos.", 401);
+      }
+
+      if (Number(u.intentos_fallidos) > 0 || u.bloqueado_hasta)
+        await db.sql`UPDATE usuarios SET intentos_fallidos = 0, bloqueado_hasta = NULL WHERE id = ${u.id}`;
+
       return json({
         token: signToken({ uid: u.id }),
         usuario: { id: u.id, correo: u.correo, nombre: u.nombre, rol: u.rol },
@@ -168,7 +233,8 @@ export default async (req) => {
       const [u] = await db.sql`SELECT password_hash FROM usuarios WHERE id = ${yo.id}`;
       if (!verifyPassword(cuerpo.actual || "", u.password_hash))
         return err("La contraseña actual no es correcta.", 403);
-      await db.sql`UPDATE usuarios SET password_hash = ${hashPassword(nueva)} WHERE id = ${yo.id}`;
+      await db.sql`UPDATE usuarios SET password_hash = ${hashPassword(nueva)},
+                                       intentos_fallidos = 0, bloqueado_hasta = NULL WHERE id = ${yo.id}`;
       return json({ ok: true });
     }
 
@@ -186,14 +252,16 @@ export default async (req) => {
       return json({ ok: true, correo: nuevo });
     }
 
-    /* ============ VENDEDORES (solo dueño) ============ */
+    /* ============ USUARIOS (solo dueño) ============ */
     if (ruta === "usuarios") {
-      if (!esDueno(yo)) return err("Solo el administrador puede gestionar vendedores.", 403);
+      if (!esDueno(yo)) return err("Solo el administrador puede gestionar usuarios.", 403);
       if (metodo === "GET") {
         const filas = await db.sql`
           SELECT u.id, u.correo, u.nombre, u.rol, u.telefono, u.activo, u.creado_en,
-                 (SELECT COUNT(*)::int FROM cotizaciones c WHERE c.vendedor_id = u.id) AS cotizaciones
-          FROM usuarios u ORDER BY u.rol DESC, u.nombre`;
+                 (SELECT COUNT(*)::int FROM cotizaciones c WHERE c.vendedor_id = u.id) AS cotizaciones,
+                 (SELECT COUNT(*)::int FROM vales v WHERE v.usuario_id = u.id) AS vales
+          FROM usuarios u
+          ORDER BY CASE u.rol WHEN 'owner' THEN 0 WHEN 'vendedor' THEN 1 ELSE 2 END, u.nombre`;
         return json({ usuarios: filas });
       }
       if (metodo === "POST") {
@@ -204,9 +272,10 @@ export default async (req) => {
           return err("Correo, nombre y contraseña de al menos 8 caracteres son obligatorios.");
         const existe = await db.sql`SELECT id FROM usuarios WHERE correo = ${correo}`;
         if (existe.length) return err("Ya existe un usuario con ese correo.", 409);
+        const rol = ROLES.includes(cuerpo.rol) ? cuerpo.rol : "vendedor";
         const [u] = await db.sql`
           INSERT INTO usuarios (correo, nombre, rol, telefono, password_hash)
-          VALUES (${correo}, ${nombre}, ${cuerpo.rol === "owner" ? "owner" : "vendedor"},
+          VALUES (${correo}, ${nombre}, ${rol},
                   ${limpio(cuerpo.telefono, 40)}, ${hashPassword(pass)})
           RETURNING id, correo, nombre, rol, telefono, activo`;
         return json({ usuario: u }, 201);
@@ -217,7 +286,21 @@ export default async (req) => {
           return err("No puedes desactivar tu propia cuenta.");
         if (cuerpo.password) {
           if (String(cuerpo.password).length < 8) return err("Contraseña demasiado corta.");
-          await db.sql`UPDATE usuarios SET password_hash = ${hashPassword(cuerpo.password)} WHERE id = ${id}`;
+          /* Cambiar la contraseña también levanta el bloqueo por intentos fallidos. */
+          await db.sql`UPDATE usuarios SET password_hash = ${hashPassword(cuerpo.password)},
+                                           intentos_fallidos = 0, bloqueado_hasta = NULL WHERE id = ${id}`;
+        }
+        /* Cambio de rol: ahora sí se puede promover o cambiar de puesto a una
+           cuenta existente. El único candado: nunca quedarse sin administrador. */
+        if (cuerpo.rol !== undefined) {
+          if (!ROLES.includes(cuerpo.rol)) return err("Ese rol no existe.");
+          const [act] = await db.sql`SELECT rol FROM usuarios WHERE id = ${id}`;
+          if (!act) return err("Ese usuario ya no existe.", 404);
+          if (act.rol === "owner" && cuerpo.rol !== "owner") {
+            const [q] = await db.sql`SELECT COUNT(*)::int AS n FROM usuarios WHERE rol = 'owner' AND activo AND id <> ${id}`;
+            if ((q?.n || 0) < 1) return err("No puedes quitarle el rol al único administrador. Nombra otro primero.");
+          }
+          await db.sql`UPDATE usuarios SET rol = ${cuerpo.rol} WHERE id = ${id}`;
         }
         const correoNuevo = limpio(cuerpo.correo, 120)?.toLowerCase();
         if (correoNuevo) {
@@ -238,11 +321,11 @@ export default async (req) => {
       if (metodo === "DELETE") {
         const id = num(url.searchParams.get("id"));
         const transferir = num(url.searchParams.get("transferir"));
-        if (!id) return err("Falta indicar el vendedor.");
+        if (!id) return err("Falta indicar el usuario.");
         if (id === yo.id) return err("No puedes eliminar tu propia cuenta.");
 
         const [u] = await db.sql`SELECT id, nombre, rol FROM usuarios WHERE id = ${id}`;
-        if (!u) return err("Ese vendedor ya no existe.", 404);
+        if (!u) return err("Ese usuario ya no existe.", 404);
 
         if (u.rol === "owner") {
           const [q] = await db.sql`SELECT COUNT(*)::int AS n FROM usuarios WHERE rol = 'owner' AND activo`;
@@ -379,10 +462,13 @@ export default async (req) => {
         /* El conteo de cotizaciones lo cuenta la base de datos. Antes se
            deducía de la lista ya descargada, que viene recortada, y un cliente
            con 40 cotizaciones podía aparecer con 0. */
-        const filas = esDueno(yo)
+        /* El almacenista ve el directorio completo —necesita elegir a quién se
+           le entrega el material— pero no da de alta ni edita clientes. */
+        const filas = mueveAlmacen(yo)
           ? await db.sql`
               SELECT c.*, u.nombre AS creador,
-                     (SELECT COUNT(*)::int FROM cotizaciones q WHERE q.cliente_id = c.id) AS cotizaciones
+                     (SELECT COUNT(*)::int FROM cotizaciones q WHERE q.cliente_id = c.id) AS cotizaciones,
+                     (SELECT COUNT(*)::int FROM vales v WHERE v.cliente_id = c.id AND v.cancelado_en IS NULL) AS vales
               FROM clientes c
               LEFT JOIN usuarios u ON u.id = c.creado_por
               ORDER BY c.nombre`
@@ -395,6 +481,7 @@ export default async (req) => {
               ORDER BY c.nombre`;
         return json({ clientes: filas });
       }
+      if (esAlmacen(yo)) return err("El usuario de almacén consulta clientes, no los edita.", 403);
       if (metodo === "POST") {
         const nombre = limpio(cuerpo.nombre, 160);
         if (!nombre) return err("El nombre del cliente es obligatorio.");
@@ -459,7 +546,9 @@ export default async (req) => {
     if (ruta === "catalogo") {
       if (metodo === "GET") {
         const filas = await db.sql`SELECT * FROM catalogo ORDER BY categoria, clave`;
-        return json({ catalogo: filas });
+        /* El almacenista trabaja con claves, descripciones y existencias; los
+           precios no son de su incumbencia y no salen del servidor. */
+        return json({ catalogo: esAlmacen(yo) ? filas.map(({ precio: _p, ...f }) => f) : filas });
       }
       if (!esDueno(yo)) return err("Solo el administrador modifica el catálogo.", 403);
       if (metodo === "POST") {
@@ -493,44 +582,355 @@ export default async (req) => {
         return json({ ok: true });
       }
       if (metodo === "DELETE") {
-        await db.sql`DELETE FROM catalogo WHERE id = ${num(url.searchParams.get("id"))}`;
-        return json({ ok: true });
+        /* Si el concepto nunca se movió, se borra de verdad; si ya tiene
+           historial, se desactiva y deja de aparecer, pero los movimientos se
+           conservan: es el registro de a quién se le entregó qué y cuándo. */
+        const id = num(url.searchParams.get("id"));
+        if (!id) return err("Falta indicar el concepto.");
+        const [it] = await db.sql`SELECT id, clave FROM catalogo WHERE id = ${id}`;
+        if (!it) return err("Ese concepto ya no existe.", 404);
+        const [m] = await db.sql`SELECT COUNT(*)::int AS n FROM movimientos WHERE item_id = ${id}`;
+        if ((m?.n || 0) > 0) {
+          await db.sql`UPDATE catalogo SET activo = FALSE, actualizado_en = NOW() WHERE id = ${id}`;
+          return json({
+            ok: true, desactivado: true,
+            mensaje: `${it.clave} tiene ${m.n} ${m.n === 1 ? "movimiento" : "movimientos"} de inventario, ` +
+                     `así que se desactivó en lugar de borrarse. El historial se conserva.`,
+          });
+        }
+        await db.sql`DELETE FROM catalogo WHERE id = ${id}`;
+        return json({ ok: true, desactivado: false, mensaje: `${it.clave} fue eliminado.` });
       }
     }
 
+    /* ---- Movimiento suelto: entrada rápida o ajuste de conteo ----
+       Las SALIDAS ya no pasan por aquí: van en un vale, que es lo que dice a
+       qué cliente y obra se fue el material y quién lo entregó y recibió. */
     if (ruta === "inventario/movimiento" && metodo === "POST") {
+      if (!mueveAlmacen(yo)) return err("Solo el administrador o el almacén mueven inventario.", 403);
       const itemId = num(cuerpo.item_id);
       const cantidad = Math.abs(num(cuerpo.cantidad));
-      const tipo = ["entrada", "salida", "ajuste"].includes(cuerpo.tipo) ? cuerpo.tipo : null;
-      if (!itemId || !tipo || cantidad <= 0) return err("Datos del movimiento incompletos.");
-      const [it] = await db.sql`SELECT * FROM catalogo WHERE id = ${itemId}`;
+      const tipo = ["entrada", "ajuste"].includes(cuerpo.tipo) ? cuerpo.tipo : null;
+      if (cuerpo.tipo === "salida") return err("Las salidas se registran con un vale de salida.");
+      if (!itemId || !tipo || (tipo === "entrada" && cantidad <= 0)) return err("Datos del movimiento incompletos.");
+      const motivo = limpio(cuerpo.motivo, 200);
+      /* El ajuste corrige la existencia a lo que se contó físicamente. Como
+         puede subir o bajar sin documento de por medio, el motivo es
+         obligatorio para el almacenista; el administrador puede omitirlo. */
+      if (tipo === "ajuste" && esAlmacen(yo) && !motivo)
+        return err("Para un ajuste escribe el motivo (conteo físico, merma, error de captura…).");
+
+      const [it] = await db.sql`SELECT id, unidad FROM catalogo WHERE id = ${itemId}`;
       if (!it) return err("Concepto no encontrado.", 404);
-      const actual = Number(it.existencia);
-      const saldo = tipo === "entrada" ? actual + cantidad : tipo === "salida" ? actual - cantidad : cantidad;
-      if (saldo < 0) return err(`Existencia insuficiente: solo hay ${actual} ${it.unidad}.`);
-      await db.sql`UPDATE catalogo SET existencia = ${saldo}, actualizado_en = NOW() WHERE id = ${itemId}`;
+
+      /* La suma se hace en la base de datos, en una sola instrucción: dos
+         movimientos al mismo tiempo ya no se pisan. */
+      const [fila] = tipo === "entrada"
+        ? await db.sql`
+            UPDATE catalogo SET existencia = existencia + ${cantidad}, actualizado_en = NOW()
+             WHERE id = ${itemId} RETURNING existencia AS saldo`
+        : await db.sql`
+            UPDATE catalogo SET existencia = ${cantidad}, actualizado_en = NOW()
+             WHERE id = ${itemId} RETURNING existencia AS saldo`;
+      const saldo = Number(fila.saldo);
       await db.sql`
         INSERT INTO movimientos (item_id, tipo, cantidad, saldo, motivo, usuario_id, cliente_id, fecha_entrega)
-        VALUES (${itemId}, ${tipo}, ${cantidad}, ${saldo}, ${limpio(cuerpo.motivo, 200)}, ${yo.id},
-                ${num(cuerpo.cliente_id) || null}, ${limpio(cuerpo.fecha_entrega, 20)}::date)`;
+        VALUES (${itemId}, ${tipo}, ${cantidad}, ${saldo}, ${motivo}, ${yo.id}, NULL, NULL)`;
       return json({ ok: true, saldo });
     }
 
+    /* ---- Kardex: los movimientos con su vale, cliente, obra y personas ----
+       Filtros: item, cliente, cotizacion, vale, desde, hasta, tipo, q. */
     if (ruta === "inventario/movimientos" && metodo === "GET") {
+      if (!mueveAlmacen(yo)) return err("Solo el administrador o el almacén consultan el kardex.", 403);
+      const p = url.searchParams;
+      const item = num(p.get("item")), cliente = num(p.get("cliente")),
+            cotizacion = num(p.get("cotizacion")), vale = num(p.get("vale"));
+      const tipo = ["entrada", "salida", "ajuste", "devolucion"].includes(p.get("tipo")) ? p.get("tipo") : "";
+      const desde = /^\d{4}-\d{2}-\d{2}$/.test(p.get("desde") || "") ? p.get("desde") : null;
+      const hasta = /^\d{4}-\d{2}-\d{2}$/.test(p.get("hasta") || "") ? p.get("hasta") : null;
+      const q = sinAcentos(p.get("q") || "");
+      const like = "%" + q + "%";
+      const tope = Math.min(Math.max(num(p.get("tope")) || 300, 1), 1000);
       const filas = await db.sql`
-        SELECT m.*, c.clave, c.descripcion, c.unidad, u.nombre AS usuario, cl.nombre AS cliente
-        FROM movimientos m
-        JOIN catalogo c ON c.id = m.item_id
-        LEFT JOIN usuarios u ON u.id = m.usuario_id
-        LEFT JOIN clientes cl ON cl.id = m.cliente_id
-        ORDER BY m.fecha DESC LIMIT 200`;
-      return json({ movimientos: filas });
+        SELECT k.*, COUNT(*) OVER()::int AS encontradas
+          FROM kardex k
+         WHERE (${item} = 0 OR k.item_id = ${item})
+           AND (${cliente} = 0 OR k.cliente_id = ${cliente})
+           AND (${cotizacion} = 0 OR k.cotizacion_id = ${cotizacion})
+           AND (${vale} = 0 OR k.vale_id = ${vale})
+           AND (${tipo} = '' OR k.tipo = ${tipo})
+           AND (${desde}::date IS NULL OR k.fecha >= ${desde}::date)
+           AND (${hasta}::date IS NULL OR k.fecha < (${hasta}::date + 1))
+           AND (${q} = ''
+             OR lower(translate(coalesce(k.obra,''),'ÁÉÍÓÚÜÑáéíóúüñ','AEIOUUNaeiouun')) LIKE ${like}
+             OR lower(translate(coalesce(k.cliente,''),'ÁÉÍÓÚÜÑáéíóúüñ','AEIOUUNaeiouun')) LIKE ${like}
+             OR lower(translate(coalesce(k.recibio_nombre,''),'ÁÉÍÓÚÜÑáéíóúüñ','AEIOUUNaeiouun')) LIKE ${like}
+             OR lower(translate(coalesce(k.motivo,''),'ÁÉÍÓÚÜÑáéíóúüñ','AEIOUUNaeiouun')) LIKE ${like}
+             OR lower(coalesce(k.vale,'')) LIKE ${like}
+             OR lower(k.clave) LIKE ${like})
+         ORDER BY k.fecha DESC, k.id DESC LIMIT ${tope}`;
+      const encontradas = filas.length ? Number(filas[0].encontradas) : 0;
+
+      /* Totales por concepto de lo que cumple el filtro: «¿cuánto 2442 se ha
+         ido a la obra X?» se contesta aquí sin sumar a mano. */
+      const totales = {};
+      for (const m of filas) {
+        const t = totales[m.clave] ||= { clave: m.clave, descripcion: m.descripcion, unidad: m.unidad, entradas: 0, salidas: 0 };
+        if (m.tipo === "salida") t.salidas += Number(m.cantidad);
+        else if (m.tipo === "entrada" || m.tipo === "devolucion") t.entradas += Number(m.cantidad);
+      }
+      return json({
+        movimientos: filas.map(({ encontradas: _e, ...f }) => f),
+        totales: Object.values(totales).sort((a, b) => a.clave.localeCompare(b.clave)),
+        encontradas, tope, recortada: encontradas > filas.length,
+      });
+    }
+
+    /* ---- Obras (cotizaciones) de un cliente, para elegir destino del vale ----
+       Sin precios: sólo folio, estatus y las partidas que llevan inventario,
+       para precargar cantidades. El vendedor sólo ve las suyas. */
+    if (ruta === "obras" && metodo === "GET") {
+      const idCliente = num(url.searchParams.get("cliente"));
+      if (!idCliente) return json({ obras: [] });
+      const filas = await db.sql`
+        SELECT c.id, c.folio, c.estatus, c.linea, c.tipo, c.creado_en, c.partidas, c.vendedor_id,
+               c.tecnico->>'ubicacion' AS ubicacion
+          FROM cotizaciones c
+         WHERE c.cliente_id = ${idCliente}
+           AND (${mueveAlmacen(yo)} OR c.vendedor_id = ${yo.id})
+         ORDER BY c.creado_en DESC LIMIT 100`;
+      const porClave = new Map(porClaveInv(await db.sql`
+        SELECT id, clave, descripcion, unidad, existencia FROM catalogo WHERE controla_inventario AND activo`));
+      const obras = filas.map((c) => ({
+        id: c.id, folio: c.folio, estatus: c.estatus, linea: c.linea, tipo: c.tipo,
+        creado_en: c.creado_en, ubicacion: c.ubicacion,
+        partidas: (Array.isArray(c.partidas) ? c.partidas : [])
+          .filter((p) => porClave.has(String(p.clave || "").toUpperCase()))
+          .map((p) => {
+            const it = porClave.get(String(p.clave).toUpperCase());
+            return { item_id: it.id, clave: it.clave, descripcion: it.descripcion, unidad: it.unidad,
+                     cantidad: num(p.cantidad), existencia: Number(it.existencia) };
+          }),
+      }));
+      return json({ obras });
+    }
+
+    /* ============ VALES DE ALMACÉN ============ */
+    if (ruta === "vales" && metodo === "GET") {
+      if (!mueveAlmacen(yo)) return err("Solo el administrador o el almacén consultan los vales.", 403);
+      const p = url.searchParams;
+      const q = sinAcentos(p.get("q") || ""), like = "%" + q + "%";
+      const tipo = ["salida", "entrada", "devolucion"].includes(p.get("tipo")) ? p.get("tipo") : "";
+      const cliente = num(p.get("cliente")), cotizacion = num(p.get("cotizacion"));
+      const tope = Math.min(Math.max(num(p.get("tope")) || 100, 1), 500);
+      const filas = await db.sql`
+        SELECT v.id, v.folio, v.tipo, v.fecha::text AS fecha, v.obra, v.referencia, v.cliente_id, v.cotizacion_id,
+               v.entrego_nombre, v.recibio_nombre, v.recibio_tel, v.notas, v.creado_en,
+               v.cancelado_en, v.motivo_cancelacion, v.vale_origen_id,
+               (v.recibio_firma IS NOT NULL) AS firmado,
+               cl.nombre AS cliente, q.folio AS cotizacion, u.nombre AS capturo, o.folio AS vale_origen,
+               (SELECT COUNT(*)::int FROM movimientos m WHERE m.vale_id = v.id) AS renglones,
+               (SELECT COALESCE(SUM(m.cantidad),0)::float FROM movimientos m WHERE m.vale_id = v.id) AS piezas,
+               COUNT(*) OVER()::int AS encontradas
+          FROM vales v
+          LEFT JOIN clientes cl ON cl.id = v.cliente_id
+          LEFT JOIN cotizaciones q ON q.id = v.cotizacion_id
+          LEFT JOIN usuarios u ON u.id = v.usuario_id
+          LEFT JOIN vales o ON o.id = v.vale_origen_id
+         WHERE (${tipo} = '' OR v.tipo = ${tipo})
+           AND (${cliente} = 0 OR v.cliente_id = ${cliente})
+           AND (${cotizacion} = 0 OR v.cotizacion_id = ${cotizacion})
+           AND (${q} = ''
+             OR lower(v.folio) LIKE ${like}
+             OR lower(translate(v.obra,'ÁÉÍÓÚÜÑáéíóúüñ','AEIOUUNaeiouun')) LIKE ${like}
+             OR lower(translate(coalesce(cl.nombre,''),'ÁÉÍÓÚÜÑáéíóúüñ','AEIOUUNaeiouun')) LIKE ${like}
+             OR lower(translate(coalesce(v.recibio_nombre,''),'ÁÉÍÓÚÜÑáéíóúüñ','AEIOUUNaeiouun')) LIKE ${like}
+             OR lower(translate(coalesce(v.entrego_nombre,''),'ÁÉÍÓÚÜÑáéíóúüñ','AEIOUUNaeiouun')) LIKE ${like}
+             OR lower(coalesce(q.folio,'')) LIKE ${like})
+         ORDER BY v.fecha DESC, v.id DESC LIMIT ${tope}`;
+      const encontradas = filas.length ? Number(filas[0].encontradas) : 0;
+      return json({ vales: filas.map(({ encontradas: _e, ...f }) => f), encontradas, tope, recortada: encontradas > filas.length });
+    }
+
+    if (ruta === "vales" && metodo === "POST") {
+      if (!mueveAlmacen(yo)) return err("Solo el administrador o el almacén registran vales.", 403);
+      const tipo = ["salida", "entrada", "devolucion"].includes(cuerpo.tipo) ? cuerpo.tipo : null;
+      if (!tipo) return err("Indica si es salida, entrada o devolución.");
+      const fecha = /^\d{4}-\d{2}-\d{2}$/.test(cuerpo.fecha || "") ? cuerpo.fecha : new Date().toISOString().slice(0, 10);
+      const obra = limpio(cuerpo.obra, 200);
+      const entrego = limpio(cuerpo.entrego_nombre, 120) || yo.nombre;
+      const recibio = limpio(cuerpo.recibio_nombre, 120);
+      const clienteId = num(cuerpo.cliente_id) || null;
+      const cotId = num(cuerpo.cotizacion_id) || null;
+      const origenId = tipo === "devolucion" ? (num(cuerpo.vale_origen_id) || null) : null;
+
+      if (!obra) return err(tipo === "entrada" ? "Escribe el proveedor u origen del material." : "Escribe la obra o el destino del material.");
+      if (!recibio) return err("Escribe quién recibe el material.");
+      if (clienteId) {
+        const [cl] = await db.sql`SELECT id FROM clientes WHERE id = ${clienteId}`;
+        if (!cl) return err("Ese cliente ya no existe.", 404);
+      }
+      if (cotId) {
+        const [q] = await db.sql`SELECT id, cliente_id FROM cotizaciones WHERE id = ${cotId}`;
+        if (!q) return err("Esa cotización ya no existe.", 404);
+        if (clienteId && q.cliente_id && q.cliente_id !== clienteId) return err("La cotización elegida es de otro cliente.");
+      }
+      if (origenId) {
+        const [o] = await db.sql`SELECT id, tipo FROM vales WHERE id = ${origenId}`;
+        if (!o || o.tipo !== "salida") return err("El vale de origen de la devolución no es un vale de salida.");
+      }
+
+      /* Partidas: se juntan las repetidas y se descartan las vacías. */
+      const juntas = new Map();
+      for (const p of (Array.isArray(cuerpo.partidas) ? cuerpo.partidas : [])) {
+        const id = num(p.item_id), c = Math.abs(num(p.cantidad));
+        if (!id || c <= 0) continue;
+        juntas.set(id, (juntas.get(id) || 0) + c);
+      }
+      if (!juntas.size) return err("Agrega al menos un concepto con cantidad.");
+      if (juntas.size > 60) return err("Un vale admite hasta 60 conceptos distintos.");
+
+      const ids = [...juntas.keys()];
+      const items = await db.sql`
+        SELECT id, clave, descripcion, unidad, existencia, controla_inventario, activo
+          FROM catalogo WHERE id = ANY(${ids}::int[])`;
+      const porId = new Map(items.map((i) => [i.id, i]));
+      for (const id of ids) {
+        const it = porId.get(id);
+        if (!it) return err(`El concepto #${id} ya no existe.`, 404);
+        if (!it.controla_inventario) return err(`${it.clave} no lleva control de inventario.`);
+      }
+      if (tipo === "salida") {
+        const faltan = ids.filter((id) => Number(porId.get(id).existencia) < juntas.get(id))
+          .map((id) => { const it = porId.get(id); return `${it.clave}: pides ${juntas.get(id)} y hay ${Number(it.existencia)} ${it.unidad}`; });
+        if (faltan.length) return err("Existencia insuficiente. " + faltan.join(" · "));
+      }
+
+      /* Cabecera con folio; si dos almacenistas guardan al mismo tiempo y el
+         folio choca, se reintenta con el siguiente. */
+      const vale = await conFolio(async (folio) => {
+        const [v] = await db.sql`
+          INSERT INTO vales (folio, tipo, fecha, cliente_id, cotizacion_id, obra, referencia, usuario_id,
+                             entrego_nombre, recibio_nombre, recibio_tel, recibio_firma, vale_origen_id, notas)
+          VALUES (${folio}, ${tipo}, ${fecha}::date, ${clienteId}, ${cotId}, ${obra}, ${limpio(cuerpo.referencia, 120)},
+                  ${yo.id}, ${entrego}, ${recibio}, ${limpio(cuerpo.recibio_tel, 40)}, ${firmaValida(cuerpo.recibio_firma)},
+                  ${origenId}, ${limpio(cuerpo.notas, 1000)})
+          RETURNING *`;
+        return v;
+      }, 8, () => siguienteFolioVale(tipo));
+
+      /* Cada renglón se descuenta (o suma) y se registra en UNA sola instrucción:
+         si dos vales del mismo concepto se guardan al mismo tiempo, la base de
+         datos los pone en fila y ninguno deja la existencia negativa. */
+      const motivo = `Vale ${vale.folio} · ${obra}`.slice(0, 200);
+      const tipoMov = tipo;                  /* salida | entrada | devolucion */
+      const aplicadas = [];
+      for (const id of ids) {
+        const c = juntas.get(id);
+        const [fila] = tipo === "salida"
+          ? await db.sql`
+              WITH u AS (UPDATE catalogo SET existencia = existencia - ${c}, actualizado_en = NOW()
+                          WHERE id = ${id} AND existencia >= ${c} RETURNING existencia)
+              INSERT INTO movimientos (item_id, tipo, cantidad, saldo, motivo, usuario_id, cliente_id, fecha_entrega, vale_id)
+              SELECT ${id}, ${tipoMov}, ${c}, u.existencia, ${motivo}, ${yo.id}, ${clienteId}, ${fecha}::date, ${vale.id} FROM u
+              RETURNING saldo`
+          : await db.sql`
+              WITH u AS (UPDATE catalogo SET existencia = existencia + ${c}, actualizado_en = NOW()
+                          WHERE id = ${id} RETURNING existencia)
+              INSERT INTO movimientos (item_id, tipo, cantidad, saldo, motivo, usuario_id, cliente_id, fecha_entrega, vale_id)
+              SELECT ${id}, ${tipoMov}, ${c}, u.existencia, ${motivo}, ${yo.id}, ${clienteId}, ${fecha}::date, ${vale.id} FROM u
+              RETURNING saldo`;
+        if (!fila) {
+          /* Alguien se llevó ese material un instante antes. Se regresa lo
+             que ya se había descontado y el vale completo se rechaza. */
+          for (const idOk of aplicadas)
+            await db.sql`UPDATE catalogo SET existencia = existencia + ${juntas.get(idOk)} WHERE id = ${idOk}`;
+          await db.sql`DELETE FROM movimientos WHERE vale_id = ${vale.id}`;
+          await db.sql`DELETE FROM vales WHERE id = ${vale.id}`;
+          const it = porId.get(id);
+          const [ahora] = await db.sql`SELECT existencia FROM catalogo WHERE id = ${id}`;
+          return err(`Existencia insuficiente de ${it.clave}: pides ${c} y hay ${Number(ahora?.existencia ?? 0)} ${it.unidad}. El vale no se guardó.`, 409);
+        }
+        aplicadas.push(id);
+      }
+      return json({ vale: await valeCompleto(vale.id) }, 201);
+    }
+
+    if (ruta.startsWith("vale/")) {
+      if (!mueveAlmacen(yo)) return err("Solo el administrador o el almacén consultan los vales.", 403);
+      const [_, idTxt, accion] = ruta.split("/");
+      const id = num(idTxt);
+      const [v] = await db.sql`SELECT * FROM vales WHERE id = ${id}`;
+      if (!v) return err("Ese vale no existe.", 404);
+
+      if (metodo === "GET" && !accion) return json({ vale: await valeCompleto(id) });
+
+      /* Se pueden corregir las personas, el teléfono, la firma y las notas.
+         Las cantidades NO: para eso se cancela el vale y se hace otro, así el
+         kardex siempre cuadra con lo que pasó. */
+      if (metodo === "PATCH" && !accion) {
+        if (v.cancelado_en) return err("Este vale está cancelado y ya no se edita.");
+        await db.sql`
+          UPDATE vales SET
+            entrego_nombre = COALESCE(${limpio(cuerpo.entrego_nombre, 120)}, entrego_nombre),
+            recibio_nombre = COALESCE(${limpio(cuerpo.recibio_nombre, 120)}, recibio_nombre),
+            recibio_tel    = CASE WHEN ${cuerpo.recibio_tel === undefined} THEN recibio_tel ELSE ${limpio(cuerpo.recibio_tel, 40)} END,
+            recibio_firma  = CASE WHEN ${cuerpo.recibio_firma === ""} THEN NULL
+                                  ELSE COALESCE(${firmaValida(cuerpo.recibio_firma)}, recibio_firma) END,
+            referencia     = CASE WHEN ${cuerpo.referencia === undefined} THEN referencia ELSE ${limpio(cuerpo.referencia, 120)} END,
+            notas          = CASE WHEN ${cuerpo.notas === undefined} THEN notas ELSE ${limpio(cuerpo.notas, 1000)} END
+          WHERE id = ${id}`;
+        return json({ vale: await valeCompleto(id) });
+      }
+
+      /* Cancelar: sólo el administrador. No se borra nada: se registran los
+         movimientos contrarios y el vale queda marcado, con el motivo. */
+      if (metodo === "POST" && accion === "cancelar") {
+        if (!esDueno(yo)) return err("Solo el administrador cancela vales.", 403);
+        if (v.cancelado_en) return err("Ese vale ya estaba cancelado.");
+        const motivoCan = limpio(cuerpo.motivo, 300);
+        if (!motivoCan) return err("Escribe el motivo de la cancelación.");
+        const lineas = await db.sql`
+          SELECT m.item_id, m.cantidad, c.clave, c.unidad, c.existencia
+            FROM movimientos m JOIN catalogo c ON c.id = m.item_id WHERE m.vale_id = ${id}`;
+        /* Cancelar una entrada saca material: tiene que haber de dónde. */
+        if (v.tipo !== "salida") {
+          const faltan = lineas.filter((l) => Number(l.existencia) < Number(l.cantidad))
+            .map((l) => `${l.clave}: hay ${Number(l.existencia)} ${l.unidad} y el vale trajo ${Number(l.cantidad)}`);
+          if (faltan.length) return err("No se puede cancelar: ese material ya salió. " + faltan.join(" · "));
+        }
+        const motivoRev = `Cancelación de ${v.folio}: ${motivoCan}`.slice(0, 200);
+        for (const l of lineas) {
+          const c = Number(l.cantidad);
+          const [fila] = v.tipo === "salida"
+            ? await db.sql`
+                WITH u AS (UPDATE catalogo SET existencia = existencia + ${c}, actualizado_en = NOW()
+                            WHERE id = ${l.item_id} RETURNING existencia)
+                INSERT INTO movimientos (item_id, tipo, cantidad, saldo, motivo, usuario_id, cliente_id, vale_id)
+                SELECT ${l.item_id}, 'entrada', ${c}, u.existencia, ${motivoRev}, ${yo.id}, ${v.cliente_id}, ${id} FROM u
+                RETURNING saldo`
+            : await db.sql`
+                WITH u AS (UPDATE catalogo SET existencia = existencia - ${c}, actualizado_en = NOW()
+                            WHERE id = ${l.item_id} AND existencia >= ${c} RETURNING existencia)
+                INSERT INTO movimientos (item_id, tipo, cantidad, saldo, motivo, usuario_id, cliente_id, vale_id)
+                SELECT ${l.item_id}, 'salida', ${c}, u.existencia, ${motivoRev}, ${yo.id}, ${v.cliente_id}, ${id} FROM u
+                RETURNING saldo`;
+          if (!fila) return err(`No se pudo revertir ${l.clave}: ya no hay existencia suficiente.`, 409);
+        }
+        await db.sql`
+          UPDATE vales SET cancelado_en = NOW(), cancelado_por = ${yo.id}, motivo_cancelacion = ${motivoCan}
+           WHERE id = ${id}`;
+        return json({ vale: await valeCompleto(id) });
+      }
+      return err("Método no permitido.", 405);
     }
 
 
     /* ============ PARÁMETROS DEL COTIZADOR RÁPIDO ============ */
     if (ruta === "config") {
       if (metodo === "GET") {
+        if (esAlmacen(yo)) return json({ config: {} });     /* son parámetros de precio */
         const filas = await db.sql`SELECT clave, valor FROM config`;
         return json({ config: Object.fromEntries(filas.map((f) => [f.clave, f.valor])) });
       }
@@ -717,6 +1117,7 @@ export default async (req) => {
       if (cuerpo.accion === "borrar") {
         await db.sql`DELETE FROM cotizaciones WHERE demo`;
         await db.sql`DELETE FROM movimientos  WHERE demo`;
+        await db.sql`DELETE FROM vales        WHERE demo`;
         await db.sql`DELETE FROM clientes     WHERE demo`;
         return json({ ok: true, mensaje: "Datos de ejemplo eliminados." });
       }
@@ -737,6 +1138,7 @@ export default async (req) => {
 
         await db.sql`DELETE FROM cotizaciones`;
         await db.sql`DELETE FROM movimientos`;
+        await db.sql`DELETE FROM vales`;
         await db.sql`DELETE FROM clientes`;
         await db.sql`DELETE FROM seguimiento`;
 
@@ -904,25 +1306,40 @@ export default async (req) => {
           VALUES (${creadas[i]}, ${yo.id}, ${estatus}, ${nota})`;
       }
 
-      const MOVS = [
-        ["001",     "entrada", 2000, "Producción recibida del proveedor"],
-        ["001",     "salida",   800, "Obra Rohovi"],
-        ["ABZ-INT", "entrada", 3000, "Compra a proveedor"],
-        ["ABZ-INT", "salida",  2400, "Obra Interalum"],
-        ["002",     "entrada",  900, "Producción recibida"],
-        ["EPDM",    "entrada", 5000, "Compra a proveedor"],
-        ["EPDM",    "salida",  2400, "Obra Interalum"],
+      /* Movimientos de ejemplo, ya en forma de vales: una entrada del
+         proveedor y dos salidas a obra, con quién entregó y quién recibió. */
+      const VALES = [
+        { tipo: "entrada", obra: "Alyex · extrusión de perfiles", referencia: "Remisión AX-4471",
+          entrego: "Transportes Alyex", recibio: "Almacén Marcelestial",
+          partidas: [["001", 2000], ["002", 900], ["ABZ-INT", 3000], ["EPDM", 5000]] },
+        { tipo: "salida", cli: 2, cot: 0, obra: "Nave Iztapalapa · techo lámina",
+          entrego: "Juan Pérez (almacén)", recibio: "Ing. Torres (instalador)", tel: "5588220134",
+          partidas: [["001", 800], ["ABZ-INT", 1600], ["EPDM", 1600]] },
+        { tipo: "salida", cli: 3, cot: 1, obra: "Interalum · planta Cancún",
+          entrego: "Juan Pérez (almacén)", recibio: "Rafael Chiang", tel: "9982114477",
+          partidas: [["ABZ-INT", 800], ["EPDM", 800]] },
       ];
-      for (const [clave, tipo, cant, motivo] of MOVS) {
-        const [it] = await db.sql`SELECT id, existencia FROM catalogo WHERE clave = ${clave}`;
-        if (!it) continue;
-        const saldo = tipo === "entrada"
-          ? Number(it.existencia) + cant
-          : Math.max(0, Number(it.existencia) - cant);
-        await db.sql`UPDATE catalogo SET existencia = ${saldo}, actualizado_en = NOW() WHERE id = ${it.id}`;
-        await db.sql`
-          INSERT INTO movimientos (item_id, tipo, cantidad, saldo, motivo, usuario_id, demo)
-          VALUES (${it.id}, ${tipo}, ${cant}, ${saldo}, ${motivo}, ${yo.id}, TRUE)`;
+      for (const v of VALES) {
+        const folioV = await siguienteFolioVale(v.tipo);
+        const [vale] = await db.sql`
+          INSERT INTO vales (folio, tipo, fecha, cliente_id, cotizacion_id, obra, referencia, usuario_id,
+                             entrego_nombre, recibio_nombre, recibio_tel, notas, demo)
+          VALUES (${folioV}, ${v.tipo}, CURRENT_DATE, ${v.cli !== undefined ? ids[v.cli] : null},
+                  ${v.cot !== undefined ? creadas[v.cot] : null}, ${v.obra}, ${v.referencia || null}, ${yo.id},
+                  ${v.entrego}, ${v.recibio}, ${v.tel || null}, 'Vale de ejemplo para demostración.', TRUE)
+          RETURNING id, folio`;
+        for (const [clave, cant] of v.partidas) {
+          const [it] = await db.sql`SELECT id, existencia FROM catalogo WHERE clave = ${clave}`;
+          if (!it) continue;
+          const saldo = v.tipo === "salida"
+            ? Math.max(0, Number(it.existencia) - cant)
+            : Number(it.existencia) + cant;
+          await db.sql`UPDATE catalogo SET existencia = ${saldo}, actualizado_en = NOW() WHERE id = ${it.id}`;
+          await db.sql`
+            INSERT INTO movimientos (item_id, tipo, cantidad, saldo, motivo, usuario_id, cliente_id, fecha_entrega, vale_id, demo)
+            VALUES (${it.id}, ${v.tipo}, ${cant}, ${saldo}, ${"Vale " + vale.folio + " · " + v.obra}, ${yo.id},
+                    ${v.cli !== undefined ? ids[v.cli] : null}, CURRENT_DATE, ${vale.id}, TRUE)`;
+        }
       }
 
       return json({ ok: true, mensaje: `Se cargaron ${CLIENTES.length} clientes y ${COTS.length} cotizaciones de ejemplo.` });
@@ -930,6 +1347,26 @@ export default async (req) => {
 
     /* ============ PANEL ============ */
     if (ruta === "panel" && metodo === "GET") {
+      /* El panel del almacén: lo que hay bajo mínimo y el movimiento del mes. */
+      if (esAlmacen(yo)) {
+        const bajoMinimo = await db.sql`SELECT clave, descripcion, existencia, minimo, unidad FROM catalogo
+                                         WHERE controla_inventario AND activo AND existencia <= minimo ORDER BY clave`;
+        const [mes] = await db.sql`
+          SELECT COUNT(*) FILTER (WHERE tipo = 'salida')::int AS salidas,
+                 COUNT(*) FILTER (WHERE tipo = 'entrada')::int AS entradas,
+                 COUNT(*) FILTER (WHERE tipo = 'devolucion')::int AS devoluciones
+            FROM vales WHERE cancelado_en IS NULL AND fecha >= date_trunc('month', CURRENT_DATE)`;
+        const [piezas] = await db.sql`
+          SELECT COALESCE(SUM(m.cantidad) FILTER (WHERE m.tipo = 'salida'),0)::float AS salidas
+            FROM movimientos m JOIN vales v ON v.id = m.vale_id
+           WHERE v.cancelado_en IS NULL AND v.fecha >= date_trunc('month', CURRENT_DATE)`;
+        const ultimos = await db.sql`
+          SELECT v.id, v.folio, v.tipo, v.fecha::text AS fecha, v.obra, cl.nombre AS cliente, v.recibio_nombre, v.cancelado_en,
+                 (SELECT COALESCE(SUM(m.cantidad),0)::float FROM movimientos m WHERE m.vale_id = v.id AND m.tipo = v.tipo) AS piezas
+            FROM vales v LEFT JOIN clientes cl ON cl.id = v.cliente_id
+           ORDER BY v.fecha DESC, v.id DESC LIMIT 6`;
+        return json({ almacen: { mes, piezasMes: piezas?.salidas || 0, ultimos }, bajoMinimo, resumen: [], porVendedor: [] });
+      }
       const resumen = esDueno(yo)
         ? await db.sql`
             SELECT estatus, COUNT(*)::int AS n, COALESCE(SUM(total),0)::float AS monto
@@ -939,7 +1376,7 @@ export default async (req) => {
             FROM cotizaciones WHERE vendedor_id = ${yo.id} GROUP BY estatus`;
       const bajoMinimo = esDueno(yo)
         ? await db.sql`SELECT clave, descripcion, existencia, minimo, unidad FROM catalogo
-                       WHERE controla_inventario AND existencia <= minimo ORDER BY clave`
+                       WHERE controla_inventario AND activo AND existencia <= minimo ORDER BY clave`
         : [];
       const porVendedor = esDueno(yo)
         ? await db.sql`
@@ -953,10 +1390,12 @@ export default async (req) => {
 
     return err("Ruta no encontrada.", 404);
   } catch (e) {
-    console.error("API error:", e, e?.cause || "");
-    /* La librería de base de datos envuelve el error real y pone toda la
-       consulta en el mensaje. Al vendedor se le muestra sólo la causa, corta. */
-    const causa = e?.cause?.message || e?.message || "desconocido";
-    return err("Error del servidor: " + String(causa).split("\n")[0].slice(0, 240), 500);
+    /* La librería de base de datos envuelve el error real y pega la consulta
+       completa —tablas, columnas, a veces datos— en el mensaje. Nada de eso
+       debe llegar al navegador. Se registra completo en Netlify con una
+       referencia de seis letras; al usuario sólo se le muestra la referencia. */
+    const ref = Math.random().toString(36).slice(2, 8).toUpperCase();
+    console.error(`API error [${ref}] ${metodo} /${ruta}:`, e, e?.cause || "");
+    return err(`Ocurrió un error en el servidor (ref. ${ref}). Si se repite, avisa al administrador con esa referencia.`, 500);
   }
 };

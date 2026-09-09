@@ -83,14 +83,22 @@
     <div id="listaCli"></div>
   </section>
 
-  <!-- Inventario -->
+  <!-- Almacén: existencias, vales y kardex -->
   <section class="vista" id="v-inv" hidden>
-    <h2 class="tit">Inventario</h2>
-    <p class="des">Perfiles y herrajes en existencia</p>
-    <div id="listaInv"></div>
-    <h3 style="font-size:15px;font-weight:700;margin:18px 0 9px">Últimos movimientos</h3>
-    <div id="listaMov"></div>
+    <h2 class="tit">Almacén</h2>
+    <p class="des" id="invDes">Perfiles y herrajes en existencia</p>
+    <div class="seg" id="invSeg" hidden>
+      <button data-s="exist" class="on">Existencias</button>
+      <button data-s="vales">Vales</button>
+      <button data-s="kardex">Kardex</button>
+    </div>
+    <div id="invExist"></div>
+    <div id="invVales" hidden></div>
+    <div id="invKardex" hidden></div>
   </section>
+
+  <!-- Editor de vale de almacén -->
+  <section class="vista" id="v-vale" hidden></section>
 
   <!-- Más -->
   <section class="vista" id="v-mas" hidden>
@@ -108,7 +116,7 @@
     <button data-v="panel" class="on"><svg viewBox="0 0 24 24"><path d="M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 9h8V3h-8z"/></svg>Panel</button>
     <button data-v="cot"><svg viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>Cotizar</button>
     <button data-v="cli"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6"/></svg>Clientes</button>
-    <button data-v="inv"><svg viewBox="0 0 24 24"><path d="M3 8h18v3H3zM3 15h18v3H3zM7 11v4M17 11v4"/></svg>Inventario</button>
+    <button data-v="inv"><svg viewBox="0 0 24 24"><path d="M3 8h18v3H3zM3 15h18v3H3zM7 11v4M17 11v4"/></svg>Almacén</button>
     <button data-v="mas"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>Más</button>
   </nav>
 </div>

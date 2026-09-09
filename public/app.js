@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.09.03";
+const VERSION = "2026.09.07";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -22,8 +22,25 @@ const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const money = (n) => "$" + (Number(n) || 0).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const numero = (v) => { const n = Number(String(v ?? "").replace(/[^0-9.\-]/g, "")); return Number.isFinite(n) ? n : 0; };
-const fecha = (f) => f ? new Date(f).toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" }) : "";
+/* Una fecha sin hora ("2026-09-07") se lee como día local: si se leyera como
+   UTC, en México se mostraría el día anterior. */
+const fecha = (f) => {
+  if (!f) return "";
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(f))
+    ? new Date(...String(f).split("-").map((x, i) => Number(x) - (i === 1 ? 1 : 0)))
+    : new Date(f);
+  return d.toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" });
+};
 const esDueno = () => S.yo?.rol === "owner";
+const esAlmacen = () => S.yo?.rol === "almacen";
+const mueveAlmacen = () => esDueno() || esAlmacen();
+const ROL_NOMBRE = { owner: "Administrador", vendedor: "Vendedor", almacen: "Almacén" };
+const TIPO_VALE = { salida: "Salida", entrada: "Entrada", devolucion: "Devolución" };
+const TIPO_MOV = { salida: "Salida", entrada: "Entrada", devolucion: "Devolución", ajuste: "Ajuste" };
+const hoyISO = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
 
 const ESTATUS = {
   borrador: "Borrador", enviada: "Enviada", negociacion: "En negociación",
@@ -133,9 +150,22 @@ $("#btnSalir").addEventListener("click", salir);
 async function entrar() {
   $("#gate").style.display = "none";
   $("#app").classList.add("on");
-  $("#quienSoy").textContent = `${S.yo.nombre} · ${esDueno() ? "Administrador" : "Vendedor"}`;
+  $("#quienSoy").textContent = `${S.yo.nombre} · ${ROL_NOMBRE[S.yo.rol] || "Vendedor"}`;
+  configurarTabs();
   await Promise.all([cargarCatalogo(), cargarClientes(), cargarConfig()]);
   ir("panel");
+}
+
+/* Las pestañas dependen del puesto: el almacén no cotiza, así que esa
+   pestaña ni se le muestra. El servidor la niega de todas formas. */
+function configurarTabs() {
+  const ocultas = esAlmacen() ? ["cot"] : [];
+  let visibles = 0;
+  $$("#tabs button").forEach((b) => {
+    b.hidden = ocultas.includes(b.dataset.v);
+    if (!b.hidden) visibles++;
+  });
+  $("#tabs").style.gridTemplateColumns = `repeat(${visibles}, 1fr)`;
 }
 
 /* ---------------- navegación ---------------- */
@@ -150,8 +180,9 @@ function ir(v) {
   const destino = $("#v-" + v);
   if (destino) destino.hidden = false;
   window.scrollTo(0, 0);
-  $("#fab").hidden = !["cot", "cli"].includes(v);
-  $("#fab").onclick = v === "cot" ? menuNueva : v === "cli" ? () => formCliente() : null;
+  const conFab = (v === "cot" && !esAlmacen()) || (v === "cli" && !esAlmacen()) || (v === "inv" && mueveAlmacen());
+  $("#fab").hidden = !conFab;
+  $("#fab").onclick = v === "cot" ? menuNueva : v === "cli" ? () => formCliente() : v === "inv" ? menuVale : null;
   if (v === "panel") verPanel();
   if (v === "cot") verCotizaciones();
   if (v === "cli") verClientes();
@@ -183,11 +214,41 @@ const paramDim = () => S.config.dimensionamiento || {};
 
 /* ---------------- panel ---------------- */
 async function verPanel() {
-  $("#panelDes").textContent = esDueno() ? "Actividad de todo el equipo" : "Resumen de tu actividad";
+  $("#panelDes").textContent = esDueno() ? "Actividad de todo el equipo"
+    : esAlmacen() ? "Movimiento del almacén este mes" : "Resumen de tu actividad";
   $("#panelKpis").innerHTML = '<div class="cargando">Cargando…</div>';
   $("#panelExtra").innerHTML = "";
   try {
-    const { resumen, bajoMinimo, porVendedor } = await api("panel");
+    const { resumen, bajoMinimo, porVendedor, almacen } = await api("panel");
+
+    if (esAlmacen() && almacen) {
+      const m = almacen.mes || {};
+      $("#panelKpis").innerHTML = `
+        <div class="kpi"><b>${Number(m.salidas || 0)}</b><span>Vales de salida</span></div>
+        <div class="kpi"><b>${Number(m.entradas || 0)}</b><span>Vales de entrada</span></div>
+        <div class="kpi"><b>${Number(almacen.piezasMes || 0).toLocaleString("es-MX")}</b><span>Piezas entregadas</span></div>`;
+      let html = `<div class="card"><h3>Últimos vales</h3>`;
+      if (!(almacen.ultimos || []).length) html += `<div class="vacio">Todavía no hay vales. Toca <b>+</b> en Almacén para el primero.</div>`;
+      (almacen.ultimos || []).forEach((v) => {
+        html += `<div class="item" style="margin:0;border:0;box-shadow:none;border-radius:0;padding:9px 0;border-bottom:1px dashed var(--line)" onclick="abrirVale(${v.id})">
+          <div class="m"><b>${esc(v.folio)} · ${TIPO_VALE[v.tipo] || v.tipo}${v.cancelado_en ? " · CANCELADO" : ""}</b>
+          <span>${fecha(v.fecha)} · ${esc(v.cliente || v.obra)}${v.cliente ? " · " + esc(v.obra) : ""}</span></div>
+          <div class="r"><b>${Number(v.piezas)}</b><span style="font-size:11px;color:var(--slate)">piezas</span></div></div>`;
+      });
+      html += `</div>`;
+      if (bajoMinimo?.length) {
+        html += `<div class="card"><h3>Inventario bajo mínimo</h3>`;
+        bajoMinimo.forEach((i) => {
+          html += `<div class="row between" style="padding:7px 0;border-bottom:1px dashed var(--line)">
+            <div style="min-width:0"><b style="font-size:13.5px">${esc(i.clave)}</b>
+            <span style="display:block;font-size:11.5px;color:var(--slate)">${esc(i.descripcion)}</span></div>
+            <span class="badge b-bajo">${Number(i.existencia)} / ${Number(i.minimo)}</span></div>`;
+        });
+        html += `</div>`;
+      }
+      $("#panelExtra").innerHTML = html;
+      return;
+    }
     const total = resumen.reduce((a, r) => a + r.n, 0);
     const monto = resumen.reduce((a, r) => a + r.monto, 0);
     const ganadas = resumen.find((r) => r.estatus === "ganada") || { n: 0, monto: 0 };
@@ -2927,8 +2988,23 @@ function formCliente(id = null) {
   const c = id ? S.clientes.find((x) => String(x.id) === String(id)) || {} : {};
   const campo = (k, etq, tipo = "text") =>
     `<label class="f"><span>${etq}</span><input name="${k}" type="${tipo}" value="${esc(c[k] || "")}"></label>`;
+  /* El almacenista consulta la ficha y el material entregado; no edita. */
+  if (esAlmacen()) {
+    if (!id) return;
+    abrirModal("Cliente", `
+      <div class="spec" style="margin-bottom:6px">
+        <div><span>Nombre</span><b style="white-space:normal">${esc(c.nombre || "")}</b></div>
+        ${c.contacto ? `<div><span>Contacto</span><b>${esc(c.contacto)}</b></div>` : ""}
+        ${c.telefono ? `<div><span>Teléfono</span><b>${esc(c.telefono)}</b></div>` : ""}
+        ${c.direccion ? `<div><span>Dirección</span><b style="white-space:normal">${esc(c.direccion)}</b></div>` : ""}
+      </div>
+      <div class="cotcli" id="valCli"><div class="cargando">Cargando vales…</div></div>`);
+    pintarValesDeCliente(id);
+    return;
+  }
   abrirModal(id ? "Editar cliente" : "Nuevo cliente", `
     ${id ? `<div class="cotcli arriba" id="cotCli"><div class="cargando">Cargando cotizaciones…</div></div>` : ""}
+    ${id && esDueno() ? `<div class="cotcli arriba" id="valCli"><div class="cargando">Cargando vales…</div></div>` : ""}
     <form id="fCli">
       <label class="f"><span>Nombre o razón social *</span><input name="nombre" required value="${esc(c.nombre || "")}"></label>
       ${campo("contacto", "Persona de contacto")}
@@ -2940,6 +3016,7 @@ function formCliente(id = null) {
       <button class="btn pri full" type="submit">Guardar</button>
     </form>`);
   if (id) pintarCotizacionesDeCliente(id);
+  if (id && esDueno()) pintarValesDeCliente(id);
   $("#fCli").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const d = Object.fromEntries(new FormData(ev.target));
@@ -3136,62 +3213,801 @@ async function unirDuplicados(i, boton) {
 }
 
 /* ---------------- inventario ---------------- */
+/* ======================================================================
+   ALMACÉN: existencias, vales de entrada/salida/devolución y kardex.
+   El administrador y el usuario de almacén mueven material; el vendedor
+   sólo consulta existencias. Toda salida se documenta con un vale que dice
+   a qué cliente y obra se fue, cuándo, quién lo entregó y quién lo recibió.
+   ====================================================================== */
+
 async function verInventario() {
+  S.invSeg ||= "exist";
+  $("#invDes").textContent = mueveAlmacen()
+    ? "Existencias, vales de entrada y salida, y kardex"
+    : "Perfiles y herrajes en existencia";
+  $("#invSeg").hidden = !mueveAlmacen();
+  if (!mueveAlmacen()) S.invSeg = "exist";
+  pintarSegInv();
+}
+
+$$("#invSeg button").forEach((b) => b.addEventListener("click", () => {
+  S.invSeg = b.dataset.s;
+  pintarSegInv();
+}));
+
+function pintarSegInv() {
+  $$("#invSeg button").forEach((b) => b.classList.toggle("on", b.dataset.s === S.invSeg));
+  $("#invExist").hidden = S.invSeg !== "exist";
+  $("#invVales").hidden = S.invSeg !== "vales";
+  $("#invKardex").hidden = S.invSeg !== "kardex";
+  if (S.invSeg === "exist") pintarExistencias();
+  if (S.invSeg === "vales") verVales();
+  if (S.invSeg === "kardex") verKardex();
+}
+
+/* ---------- existencias ---------- */
+async function pintarExistencias() {
+  $("#invExist").innerHTML = '<div class="cargando">Cargando…</div>';
   await cargarCatalogo();
-  const items = S.catalogo.filter((c) => c.controla_inventario);
-  $("#listaInv").innerHTML = !items.length
+  const items = S.catalogo.filter((c) => c.controla_inventario && c.activo !== false);
+  const puede = mueveAlmacen();
+  $("#invExist").innerHTML = !items.length
     ? '<div class="vacio">No hay conceptos con control de inventario.</div>'
-    : items.map((i) => {
+    : `${puede ? `<p class="ayuda-inv">Toca un concepto para registrar una <b>entrada rápida</b> o un <b>ajuste de conteo</b>.
+         Las salidas se hacen con un vale: botón <b>+</b>.</p>` : ""}` +
+      items.map((i) => {
         const bajo = Number(i.existencia) <= Number(i.minimo);
-        return `<div class="item" onclick="formMovimiento(${i.id})">
+        return `<div class="item" ${puede ? `onclick="formMovimiento(${i.id})"` : 'style="cursor:default"'}>
           <div class="m"><b>${esc(i.descripcion)}</b><span>${esc(i.clave)} · mínimo ${Number(i.minimo)} ${esc(i.unidad)}</span></div>
-          <div class="r"><b>${Number(i.existencia)}</b>
+          <div class="r"><b>${Number(i.existencia).toLocaleString("es-MX")}</b>
           <span class="badge ${bajo ? "b-bajo" : "b-ok"}">${bajo ? "Bajo" : "OK"}</span></div>
         </div>`;
       }).join("");
-  try {
-    const { movimientos } = await api("inventario/movimientos");
-    $("#listaMov").innerHTML = !movimientos.length
-      ? '<div class="vacio">Sin movimientos registrados.</div>'
-      : movimientos.slice(0, 25).map((m) => `
-        <div class="item" style="cursor:default">
-          <div class="m"><b>${esc(m.clave)} · ${m.tipo === "entrada" ? "Entrada" : m.tipo === "salida" ? "Salida" : "Ajuste"}</b>
-          <span>${fecha(m.fecha)}${m.cliente ? " · " + esc(m.cliente) : ""}${m.fecha_entrega ? " · entrega " + fecha(m.fecha_entrega) : ""}${m.motivo ? " · " + esc(m.motivo) : ""}</span></div>
-          <div class="r"><b style="color:${m.tipo === "salida" ? "var(--bad)" : "var(--ok)"}">
-            ${m.tipo === "salida" ? "−" : "+"}${Number(m.cantidad)}</b>
-          <span style="font-size:11px;color:var(--slate)">saldo ${Number(m.saldo)}</span></div>
-        </div>`).join("");
-  } catch { $("#listaMov").innerHTML = ""; }
 }
 
+/* Entrada rápida o ajuste de conteo sobre un solo concepto. Las salidas ya
+   no pasan por aquí: van en un vale, que es lo que deja rastro. */
 function formMovimiento(id) {
   const i = S.catalogo.find((x) => x.id === id);
-  abrirModal("Movimiento de inventario", `
+  if (!i) return;
+  abrirModal("Movimiento rápido", `
     <p style="font-size:13px;color:var(--slate);margin-bottom:14px">
       <b style="color:var(--ink)">${esc(i.descripcion)}</b><br>
       ${esc(i.clave)} · existencia actual <b style="color:var(--ink)">${Number(i.existencia)} ${esc(i.unidad)}</b></p>
     <form id="fMov">
-      <label class="f"><span>Tipo</span><select name="tipo">
-        <option value="entrada">Entrada (compra o devolución)</option>
-        <option value="salida">Salida (obra o venta)</option>
-        <option value="ajuste">Ajuste (fijar existencia real)</option>
+      <label class="f"><span>Tipo</span><select name="tipo" id="movTipo">
+        <option value="entrada">Entrada rápida (sin vale)</option>
+        <option value="ajuste">Ajuste (fijar la existencia real)</option>
       </select></label>
-      <label class="f"><span>Cantidad</span><input name="cantidad" type="number" min="0.01" step="0.01" required></label>
-      <label class="f"><span>Cliente o empresa (para salidas)</span>
-        <select name="cliente_id"><option value="">— No aplica —</option>
-        ${S.clientes.map((c) => `<option value="${c.id}">${esc(c.nombre)}</option>`).join("")}</select></label>
-      <label class="f"><span>Fecha de entrega</span><input name="fecha_entrega" type="date"></label>
-      <label class="f"><span>Motivo o referencia</span><input name="motivo" placeholder="Obra Casa Rubio, compra a proveedor…"></label>
+      <label class="f"><span id="movEtq">Cantidad que entra</span>
+        <input name="cantidad" type="number" min="0" step="0.01" required inputmode="decimal"></label>
+      <label class="f"><span>Motivo o referencia</span>
+        <input name="motivo" id="movMotivo" placeholder="Compra a proveedor, conteo físico, merma…"></label>
+      <p class="ayuda-inv" style="margin-top:-2px">Para una salida a obra o a un cliente usa
+        <b>Nuevo vale de salida</b>: ahí se registra a quién se entregó y quién recibió.</p>
       <button class="btn pri full" type="submit">Registrar</button>
     </form>`);
+  $("#movTipo").addEventListener("change", (ev) => {
+    const ajuste = ev.target.value === "ajuste";
+    $("#movEtq").textContent = ajuste ? "Existencia real contada" : "Cantidad que entra";
+    $("#movMotivo").required = ajuste && esAlmacen();
+  });
   $("#fMov").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const d = Object.fromEntries(new FormData(ev.target));
-    try {
-      await api("inventario/movimiento", { method: "POST", body: { item_id: id, ...d } });
-      cerrarModal(); verInventario();
-    } catch (x) { aviso("#modalError", x.message); }
+    const boton = ev.target.querySelector("button[type=submit]");
+    await conBoton(boton, async () => {
+      try {
+        await api("inventario/movimiento", { method: "POST", body: { item_id: id, ...d } });
+        cerrarModal(); pintarExistencias();
+      } catch (x) { aviso("#modalError", x.message); }
+    });
   });
+}
+
+/* ---------- lista de vales ---------- */
+async function verVales() {
+  const caja = $("#invVales");
+  if (!caja.querySelector("#qVale")) {
+    caja.innerHTML = `
+      <div class="buscador">
+        <input id="qVale" type="search" autocomplete="off" inputmode="search"
+               placeholder="Buscar por folio, cliente, obra o quien recibió">
+        <span id="qValeCuenta"></span>
+      </div>
+      <div class="filtros-linea">
+        <select id="fValeTipo">
+          <option value="">Todos los tipos</option>
+          <option value="salida">Salidas</option>
+          <option value="entrada">Entradas</option>
+          <option value="devolucion">Devoluciones</option>
+        </select>
+      </div>
+      <div id="listaVales"></div>`;
+    let reloj = null;
+    const buscar = () => { clearTimeout(reloj); reloj = setTimeout(pintarVales, 350); };
+    $("#qVale").addEventListener("input", buscar);
+    $("#qVale").addEventListener("search", buscar);
+    $("#fValeTipo").addEventListener("change", pintarVales);
+  }
+  pintarVales();
+}
+
+async function pintarVales() {
+  const lista = $("#listaVales");
+  if (!lista) return;
+  lista.innerHTML = '<div class="cargando">Cargando…</div>';
+  const q = ($("#qVale")?.value || "").trim();
+  const tipo = $("#fValeTipo")?.value || "";
+  try {
+    const r = await api(`vales?q=${encodeURIComponent(q)}&tipo=${tipo}&tope=150`);
+    const vales = r.vales || [];
+    $("#qValeCuenta").textContent = q || tipo ? `${r.encontradas ?? vales.length}` : "";
+    if (!vales.length) {
+      lista.innerHTML = q || tipo
+        ? `<div class="sin-resultados">Ningún vale coincide.</div>`
+        : `<div class="vacio">Todavía no hay vales.<br>Toca <b>+</b> para registrar la primera salida o entrada.</div>`;
+      return;
+    }
+    lista.innerHTML = vales.map(tarjetaVale).join("") +
+      (r.recortada ? `<div class="nota-tope">Se muestran ${vales.length} de ${r.encontradas}. Afina la búsqueda para ver los demás.</div>` : "");
+  } catch (e) { lista.innerHTML = `<div class="vacio">${esc(e.message)}</div>`; }
+}
+
+function tarjetaVale(v) {
+  const cancelado = !!v.cancelado_en;
+  const signo = v.tipo === "salida" ? "−" : "+";
+  return `
+    <div class="item vale-item ${cancelado ? "cancelado" : ""}" onclick="abrirVale(${v.id})">
+      <div class="m">
+        <b>${esc(v.folio)} <span class="badge b-${v.tipo}">${TIPO_VALE[v.tipo] || v.tipo}</span>
+           ${cancelado ? '<span class="badge b-perdida">Cancelado</span>' : ""}
+           ${v.firmado ? '<span class="badge b-ganada">Firmado</span>' : ""}</b>
+        <span>${fecha(v.fecha)} · ${esc(v.cliente || v.obra)}${v.cliente ? " · " + esc(v.obra) : ""}</span>
+        <span>${v.tipo === "entrada" ? "Entregó" : "Recibió"}: ${esc(v.tipo === "entrada" ? v.entrego_nombre : v.recibio_nombre)}${v.cotizacion ? " · " + esc(v.cotizacion) : ""}</span>
+      </div>
+      <div class="r"><b style="color:${v.tipo === "salida" ? "var(--bad)" : "var(--ok)"}">${signo}${Number(v.piezas).toLocaleString("es-MX")}</b>
+        <span style="font-size:11px;color:var(--slate)">${v.renglones} ${v.renglones === 1 ? "concepto" : "conceptos"}</span></div>
+    </div>`;
+}
+
+/* ---------- menú + ---------- */
+function menuVale() {
+  const opcion = (tipo, t, d) => `
+    <div class="item" onclick="nuevoVale('${tipo}')">
+      <div class="m"><b><span class="badge b-${tipo}" style="margin-right:6px">${TIPO_VALE[tipo]}</span>${t}</b><span>${d}</span></div>
+      <div class="r" style="color:var(--slate);font-size:19px">›</div>
+    </div>`;
+  abrirModal("Nuevo vale", `
+    ${opcion("salida", "A obra o cliente", "Descuenta del almacén. Registra a quién se entregó y quién recibió.")}
+    ${opcion("entrada", "De proveedor", "Suma al almacén. Con la remisión o factura del proveedor.")}
+    ${opcion("devolucion", "Sobrante de obra", "Regresa al almacén. Se liga al vale de salida original.")}`);
+}
+
+/* ---------- editor de vale ---------- */
+function nuevoVale(tipo, base = {}) {
+  cerrarModal();
+  S.vale = {
+    tipo, fecha: hoyISO(),
+    cliente_id: base.cliente_id ? String(base.cliente_id) : "",
+    cotizacion_id: base.cotizacion_id ? String(base.cotizacion_id) : "",
+    obra: base.obra || "",
+    referencia: "",
+    entrego_nombre: tipo === "entrada" ? "" : S.yo.nombre,
+    recibio_nombre: tipo === "entrada" ? S.yo.nombre : "",
+    recibio_tel: base.recibio_tel || "",
+    vale_origen_id: base.vale_origen_id ? String(base.vale_origen_id) : "",
+    vale_origen_folio: base.vale_origen_folio || "",
+    notas: "",
+    partidas: (base.partidas || []).map((p) => ({ ...p })),
+    obras: [], firma: null,
+  };
+  pintarEditorVale();
+  if (S.vale.cliente_id) valeCargarObras(S.vale.cliente_id);
+}
+
+function tituloVale(tipo) {
+  return tipo === "salida" ? "Vale de salida" : tipo === "entrada" ? "Vale de entrada" : "Vale de devolución";
+}
+
+function pintarEditorVale() {
+  const v = S.vale;
+  const entrada = v.tipo === "entrada";
+  const devol = v.tipo === "devolucion";
+  $$(".vista").forEach((s) => (s.hidden = true));
+  $$("#tabs button").forEach((b) => b.classList.remove("on"));
+  $("#fab").hidden = true;
+  const sec = $("#v-vale");
+  sec.hidden = false;
+  window.scrollTo(0, 0);
+
+  sec.innerHTML = `
+    <div class="row between" style="margin-bottom:10px">
+      <button class="btn sec sm" onclick="cerrarEditorVale()">← Cancelar</button>
+      <span class="badge b-${v.tipo}" style="font-size:11.5px">${TIPO_VALE[v.tipo]}</span>
+    </div>
+    <h2 class="tit">${tituloVale(v.tipo)}</h2>
+    <p class="des">${entrada ? "Material que llega al almacén." : devol
+      ? "Material que regresa de una obra al almacén." : "Material que sale del almacén a una obra o a un cliente."}</p>
+
+    <div class="card">
+      <h3>${entrada ? "Origen" : "Destino"}</h3>
+      <div class="grid2">
+        <label class="f"><span>Fecha</span><input type="date" id="vlFecha" value="${esc(v.fecha)}"></label>
+        <label class="f"><span>${entrada ? "Remisión o factura" : "Referencia"}</span>
+          <input id="vlRef" value="${esc(v.referencia)}" placeholder="${entrada ? "Remisión AX-4471" : "Pedido, orden de compra…"}"></label>
+      </div>
+      ${!entrada ? campoCliente("vlCliente", v.cliente_id, "Cliente (opcional)") : ""}
+      ${!entrada ? `
+      <label class="f"><span>Cotización / obra del cliente</span>
+        <select id="vlObra"><option value="">— Sin cotización —</option></select></label>` : ""}
+      <label class="f"><span>${entrada ? "Proveedor u origen *" : "Obra o destino *"}</span>
+        <input id="vlObraTxt" value="${esc(v.obra)}" placeholder="${entrada ? "Alyex · extrusión de perfiles" : "Nave Iztapalapa · techo lámina"}"></label>
+      ${devol ? `
+      <label class="f"><span>Vale de salida original</span>
+        <select id="vlOrigen"><option value="">— Elige el vale —</option></select></label>` : ""}
+    </div>
+
+    <div class="card">
+      <div class="row between" style="margin-bottom:8px">
+        <h3 style="margin:0">Material</h3>
+        <button class="btn pri sm" type="button" onclick="elegirConceptoVale()">+ Agregar</button>
+      </div>
+      <div id="vlPartidas"></div>
+      <div id="vlPrecarga"></div>
+    </div>
+
+    <div class="card">
+      <h3>Personas</h3>
+      <div class="grid2">
+        <label class="f"><span>Entregó *</span>
+          <input id="vlEntrego" value="${esc(v.entrego_nombre)}" placeholder="${entrada ? "Chofer o proveedor" : "Almacenista o chofer"}"></label>
+        <label class="f"><span>Recibió *</span>
+          <input id="vlRecibio" value="${esc(v.recibio_nombre)}" placeholder="${entrada ? "Quien recibe en almacén" : "Instalador, cliente o transportista"}"></label>
+      </div>
+      <label class="f"><span>Teléfono de quien recibe</span>
+        <input id="vlTel" type="tel" value="${esc(v.recibio_tel)}" placeholder="55 0000 0000"></label>
+      <!-- Va en un div, no en un label: un toque dentro de un label "activa" su
+           primer botón, que aquí sería Limpiar, y borraría la firma al empezarla. -->
+      <div class="f"><span>Firma de quien recibe (opcional)</span>
+        <div class="firma-caja">
+          <canvas id="vlFirma" class="firma" width="600" height="220"></canvas>
+          <button class="btn sec sm" type="button" onclick="limpiarFirma('vlFirma')">Limpiar</button>
+        </div></div>
+      <label class="f"><span>Notas</span>
+        <textarea id="vlNotas" placeholder="Condiciones del material, faltantes, observaciones…">${esc(v.notas)}</textarea></label>
+    </div>
+
+    <button class="btn pri full" id="vlGuardar" onclick="guardarVale(this)">Guardar ${tituloVale(v.tipo).toLowerCase()}</button>
+    <p class="ayuda-inv" style="text-align:center;margin-top:8px">Al guardar se ${entrada || devol ? "suma" : "descuenta"} el material del almacén y se genera el folio para imprimir.</p>`;
+
+  if (!entrada) {
+    activarBuscadorCliente("vlCliente");
+    $("#vlCliente").addEventListener("change", (ev) => {
+      v.cliente_id = ev.target.value;
+      v.cotizacion_id = "";
+      valeCargarObras(v.cliente_id);
+      if (devol) valeCargarOrigenes(v.cliente_id);
+    });
+    $("#vlObra").addEventListener("change", (ev) => {
+      v.cotizacion_id = ev.target.value;
+      const o = v.obras.find((x) => String(x.id) === String(v.cotizacion_id));
+      if (o && !$("#vlObraTxt").value.trim()) {
+        $("#vlObraTxt").value = o.ubicacion || (`Cotización ${o.folio}`);
+        v.obra = $("#vlObraTxt").value;
+      }
+      pintarPrecarga();
+    });
+    if (devol) valeCargarOrigenes(v.cliente_id);
+  }
+  ["vlFecha", "vlRef", "vlObraTxt", "vlEntrego", "vlRecibio", "vlTel", "vlNotas"].forEach((id) => {
+    const el = $("#" + id);
+    if (el) el.addEventListener("input", leerVale);
+  });
+  iniciarFirma("vlFirma");
+  pintarPartidasVale();
+}
+
+function leerVale() {
+  const v = S.vale;
+  if (!v) return;
+  v.fecha = $("#vlFecha")?.value || v.fecha;
+  v.referencia = $("#vlRef")?.value || "";
+  v.obra = $("#vlObraTxt")?.value || "";
+  v.entrego_nombre = $("#vlEntrego")?.value || "";
+  v.recibio_nombre = $("#vlRecibio")?.value || "";
+  v.recibio_tel = $("#vlTel")?.value || "";
+  v.notas = $("#vlNotas")?.value || "";
+  if ($("#vlOrigen")) v.vale_origen_id = $("#vlOrigen").value;
+}
+
+async function valeCargarObras(clienteId) {
+  const sel = $("#vlObra");
+  if (!sel) return;
+  S.vale.obras = [];
+  sel.innerHTML = `<option value="">— Sin cotización —</option>`;
+  if (!clienteId) { pintarPrecarga(); return; }
+  try {
+    const { obras } = await api("obras?cliente=" + clienteId);
+    S.vale.obras = obras || [];
+    sel.innerHTML = `<option value="">— Sin cotización —</option>` +
+      S.vale.obras.map((o) => `<option value="${o.id}">${esc(o.folio)} · ${ESTATUS[o.estatus] || o.estatus}${o.ubicacion ? " · " + esc(o.ubicacion) : ""}${o.partidas.length ? ` · ${o.partidas.length} conceptos de almacén` : ""}</option>`).join("");
+    sel.value = S.vale.cotizacion_id || "";
+  } catch { /* sin obras */ }
+  pintarPrecarga();
+}
+
+async function valeCargarOrigenes(clienteId) {
+  const sel = $("#vlOrigen");
+  if (!sel) return;
+  try {
+    const r = await api(`vales?tipo=salida&tope=60${clienteId ? "&cliente=" + clienteId : ""}`);
+    const lista = (r.vales || []).filter((x) => !x.cancelado_en);
+    sel.innerHTML = `<option value="">— Elige el vale —</option>` +
+      lista.map((x) => `<option value="${x.id}">${esc(x.folio)} · ${fecha(x.fecha)} · ${esc(x.cliente || x.obra)}</option>`).join("");
+    sel.value = S.vale.vale_origen_id || "";
+  } catch { /* nada */ }
+}
+
+/* Si el vale viene de una cotización, se ofrece precargar las cantidades de
+   estructura que ésta lleva; el almacenista ajusta lo que realmente sale. */
+function pintarPrecarga() {
+  const caja = $("#vlPrecarga");
+  if (!caja) return;
+  const o = (S.vale.obras || []).find((x) => String(x.id) === String(S.vale.cotizacion_id));
+  caja.innerHTML = o && o.partidas.length
+    ? `<button class="btn sec sm" type="button" style="margin-top:8px" onclick="precargarDeCotizacion()">
+         ⤓ Precargar ${o.partidas.length} conceptos de ${esc(o.folio)}</button>`
+    : "";
+}
+
+function precargarDeCotizacion() {
+  const o = (S.vale.obras || []).find((x) => String(x.id) === String(S.vale.cotizacion_id));
+  if (!o) return;
+  o.partidas.forEach((p) => {
+    const ya = S.vale.partidas.find((x) => x.item_id === p.item_id);
+    if (ya) ya.cantidad = p.cantidad; else S.vale.partidas.push({ ...p });
+  });
+  pintarPartidasVale();
+}
+
+function pintarPartidasVale() {
+  const v = S.vale;
+  const caja = $("#vlPartidas");
+  if (!caja) return;
+  if (!v.partidas.length) {
+    caja.innerHTML = `<div class="vacio" style="padding:16px 0">Sin conceptos todavía.<br>Toca <b>+ Agregar</b> para elegir perfiles y herrajes.</div>`;
+    return;
+  }
+  const salida = v.tipo === "salida";
+  caja.innerHTML = v.partidas.map((p, i) => {
+    const falta = salida && Number(p.cantidad) > Number(p.existencia);
+    return `
+    <div class="vale-partida ${falta ? "falta" : ""}">
+      <div class="d"><b>${esc(p.clave)} · ${esc(p.descripcion)}</b>
+        <span>Existencia ${Number(p.existencia).toLocaleString("es-MX")} ${esc(p.unidad)}${falta ? " · <b>no alcanza</b>" : ""}</span></div>
+      <input type="number" min="0" step="0.01" inputmode="decimal" value="${Number(p.cantidad) || ""}"
+             oninput="cantidadVale(${i}, this.value)" placeholder="0">
+      <span class="u">${esc(p.unidad)}</span>
+      <button class="x" type="button" onclick="quitarPartidaVale(${i})" aria-label="Quitar">×</button>
+    </div>`;
+  }).join("") + `<div class="total-row"><span>Total de piezas</span>
+      <b>${v.partidas.reduce((a, p) => a + (Number(p.cantidad) || 0), 0).toLocaleString("es-MX")}</b></div>`;
+}
+
+function cantidadVale(i, valor) {
+  const p = S.vale.partidas[i];
+  if (!p) return;
+  p.cantidad = numero(valor);
+  /* Sólo se repinta el aviso de existencia, no el campo (o se pierde el foco). */
+  const fila = $$("#vlPartidas .vale-partida")[i];
+  if (fila) fila.classList.toggle("falta", S.vale.tipo === "salida" && p.cantidad > Number(p.existencia));
+  const tot = $("#vlPartidas .total-row b");
+  if (tot) tot.textContent = S.vale.partidas.reduce((a, x) => a + (Number(x.cantidad) || 0), 0).toLocaleString("es-MX");
+}
+
+function quitarPartidaVale(i) {
+  S.vale.partidas.splice(i, 1);
+  pintarPartidasVale();
+}
+
+/* Selector de conceptos con buscador. Sólo los que llevan inventario. */
+function elegirConceptoVale() {
+  const items = S.catalogo.filter((c) => c.controla_inventario && c.activo !== false);
+  abrirModal("Agregar concepto", `
+    <div class="buscador"><input id="qConcepto" type="search" autocomplete="off" placeholder="Clave o descripción"></div>
+    <div id="listaConceptos" style="max-height:60vh;overflow:auto"></div>`);
+  const pintar = () => {
+    const q = paraBuscar($("#qConcepto").value).trim();
+    const lista = !q ? items : items.filter((c) => paraBuscar(c.clave + " " + c.descripcion).includes(q));
+    $("#listaConceptos").innerHTML = !lista.length
+      ? `<div class="sin-resultados">Nada coincide con <b>${esc($("#qConcepto").value)}</b>.</div>`
+      : lista.map((c) => {
+          const ya = S.vale.partidas.some((p) => p.item_id === c.id);
+          return `<div class="item" onclick="agregarConceptoVale(${c.id})">
+            <div class="m"><b>${esc(c.clave)} · ${esc(c.descripcion)}</b>
+              <span>Existencia ${Number(c.existencia).toLocaleString("es-MX")} ${esc(c.unidad)}${ya ? " · ya está en el vale" : ""}</span></div>
+            <div class="r"><span style="color:var(--blue);font-size:22px;font-weight:700">+</span></div></div>`;
+        }).join("");
+  };
+  $("#qConcepto").addEventListener("input", pintar);
+  pintar();
+  setTimeout(() => $("#qConcepto").focus(), 50);
+}
+
+function agregarConceptoVale(id) {
+  const c = S.catalogo.find((x) => x.id === id);
+  if (!c) return;
+  if (!S.vale.partidas.some((p) => p.item_id === id))
+    S.vale.partidas.push({ item_id: c.id, clave: c.clave, descripcion: c.descripcion, unidad: c.unidad,
+                           existencia: Number(c.existencia), cantidad: 0 });
+  cerrarModal();
+  pintarPartidasVale();
+  const filas = $$("#vlPartidas input");
+  const ultima = filas[filas.length - 1];
+  if (ultima) ultima.focus();
+}
+
+async function guardarVale(boton) {
+  leerVale();
+  const v = S.vale;
+  const partidas = v.partidas.filter((p) => Number(p.cantidad) > 0).map((p) => ({ item_id: p.item_id, cantidad: Number(p.cantidad) }));
+  const entrada = v.tipo === "entrada";
+  if (!v.obra.trim()) return alert(entrada ? "Escribe el proveedor u origen del material." : "Escribe la obra o el destino del material.");
+  if (!partidas.length) return alert("Agrega al menos un concepto con cantidad.");
+  if (!v.entrego_nombre.trim() || !v.recibio_nombre.trim()) return alert("Falta quién entregó o quién recibió.");
+  if (v.tipo === "devolucion" && !v.vale_origen_id && !confirm("No elegiste el vale de salida original. ¿Registrar la devolución sin ligarla?")) return;
+
+  await conBoton(boton, async () => {
+    try {
+      const { vale } = await api("vales", { method: "POST", body: {
+        tipo: v.tipo, fecha: v.fecha, cliente_id: v.cliente_id || null, cotizacion_id: v.cotizacion_id || null,
+        obra: v.obra, referencia: v.referencia, entrego_nombre: v.entrego_nombre, recibio_nombre: v.recibio_nombre,
+        recibio_tel: v.recibio_tel, recibio_firma: firmaDataUrl("vlFirma"), vale_origen_id: v.vale_origen_id || null,
+        notas: v.notas, partidas,
+      }});
+      S.vale = null;
+      await cargarCatalogo();
+      S.invSeg = "vales";
+      ir("inv");
+      abrirVale(vale.id, vale);
+    } catch (x) { alert(x.message); }
+  }, "Guardando…");
+}
+
+function cerrarEditorVale() {
+  if (S.vale && S.vale.partidas.length && !confirm("¿Descartar este vale sin guardar?")) return;
+  S.vale = null;
+  ir("inv");
+}
+
+/* ---------- ficha del vale ---------- */
+async function abrirVale(id, precargado = null) {
+  let v = precargado;
+  if (!v) {
+    abrirModal("Vale", '<div class="cargando">Cargando…</div>');
+    try { v = (await api("vale/" + id)).vale; }
+    catch (e) { $("#modalCuerpo").innerHTML = `<div class="vacio">${esc(e.message)}</div>`; return; }
+  }
+  S.valeAbierto = v;
+  const cancelado = !!v.cancelado_en;
+  const total = v.partidas.reduce((a, p) => a + Number(p.cantidad), 0);
+  const dato = (etq, val) => val ? `<div><span>${etq}</span><b>${esc(val)}</b></div>` : "";
+  abrirModal(`${v.folio}`, `
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <span class="badge b-${v.tipo}">${TIPO_VALE[v.tipo]}</span>
+      ${cancelado ? '<span class="badge b-perdida">Cancelado</span>' : ""}
+      ${v.recibio_firma ? '<span class="badge b-ganada">Firmado</span>' : ""}
+      <span style="font-size:12.5px;color:var(--slate)">${fecha(v.fecha)}</span>
+    </div>
+    ${cancelado ? `<div class="aviso err on">Cancelado el ${fecha(v.cancelado_en)} por ${esc(v.cancelo || "")}: ${esc(v.motivo_cancelacion || "")}.
+      El material se regresó al almacén con movimientos inversos.</div>` : ""}
+    <div class="spec vale-spec" style="margin-bottom:12px">
+      ${dato("Cliente", v.cliente)}
+      ${dato(v.tipo === "entrada" ? "Proveedor / origen" : "Obra / destino", v.obra)}
+      ${dato("Cotización", v.cotizacion)}
+      ${dato("Referencia", v.referencia)}
+      ${dato("Vale de origen", v.vale_origen)}
+      ${dato("Entregó", v.entrego_nombre)}
+      ${dato("Recibió", v.recibio_nombre + (v.recibio_tel ? " · " + v.recibio_tel : ""))}
+      ${dato("Capturó", (v.capturo || "") + " · " + fecha(v.creado_en))}
+    </div>
+    <table class="tabla-vale">
+      <tr><th>Clave</th><th>Descripción</th><th class="n">Cant.</th></tr>
+      ${v.partidas.map((p) => `<tr><td><b>${esc(p.clave)}</b></td><td>${esc(p.descripcion)}</td>
+        <td class="n"><b>${Number(p.cantidad).toLocaleString("es-MX")}</b> ${esc(p.unidad)}</td></tr>`).join("")}
+      <tr class="tot"><td colspan="2">Total de piezas</td><td class="n">${total.toLocaleString("es-MX")}</td></tr>
+    </table>
+    ${v.notas ? `<p style="font-size:12.5px;color:var(--slate);margin-top:10px"><b>Notas:</b> ${esc(v.notas)}</p>` : ""}
+    ${v.recibio_firma ? `<div class="firma-vista"><span>Firma de ${esc(v.recibio_nombre)}</span><img src="${v.recibio_firma}" alt="Firma"></div>` : ""}
+    <div class="acciones" style="margin-top:14px">
+      <button class="btn pri sm" onclick="imprimirVale()">Imprimir o PDF</button>
+      ${!cancelado ? `<button class="btn sec sm" onclick="formEntregaVale()">${v.recibio_firma ? "Editar entrega" : "Firmar / editar entrega"}</button>` : ""}
+      ${!cancelado && v.tipo === "salida" ? `<button class="btn sec sm" onclick="devolverDeVale()">Registrar devolución</button>` : ""}
+      ${!cancelado && esDueno() ? `<button class="btn dan sm" onclick="cancelarVale()">Cancelar vale</button>` : ""}
+    </div>`);
+}
+
+/* Corregir personas, teléfono, firma y notas. Las cantidades no se tocan:
+   para eso se cancela y se hace otro, y así el kardex siempre cuadra. */
+function formEntregaVale() {
+  const v = S.valeAbierto;
+  abrirModal(`${v.folio} · datos de entrega`, `
+    <form id="fEnt">
+      <div class="grid2">
+        <label class="f"><span>Entregó</span><input name="entrego_nombre" value="${esc(v.entrego_nombre)}" required></label>
+        <label class="f"><span>Recibió</span><input name="recibio_nombre" value="${esc(v.recibio_nombre)}" required></label>
+      </div>
+      <label class="f"><span>Teléfono de quien recibe</span><input name="recibio_tel" type="tel" value="${esc(v.recibio_tel || "")}"></label>
+      <div class="f"><span>Firma de quien recibe</span>
+        <div class="firma-caja">
+          <canvas id="enFirma" class="firma" width="600" height="220"></canvas>
+          <button class="btn sec sm" type="button" onclick="limpiarFirma('enFirma')">Limpiar</button>
+        </div>
+        ${v.recibio_firma ? `<small style="font-size:11px;color:var(--slate)">Ya hay una firma guardada. Si trazas otra, la sustituye; si dejas el recuadro vacío, se conserva.</small>` : ""}</div>
+      <label class="f"><span>Referencia</span><input name="referencia" value="${esc(v.referencia || "")}"></label>
+      <label class="f"><span>Notas</span><textarea name="notas">${esc(v.notas || "")}</textarea></label>
+      <button class="btn pri full" type="submit">Guardar</button>
+    </form>`);
+  iniciarFirma("enFirma");
+  $("#fEnt").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const d = Object.fromEntries(new FormData(ev.target));
+    const firma = firmaDataUrl("enFirma");
+    if (firma) d.recibio_firma = firma;
+    const boton = ev.target.querySelector("button[type=submit]");
+    await conBoton(boton, async () => {
+      try {
+        const { vale } = await api("vale/" + v.id, { method: "PATCH", body: d });
+        abrirVale(vale.id, vale);
+        if (vistaActual === "inv" && S.invSeg === "vales") pintarVales();
+      } catch (x) { aviso("#modalError", x.message); }
+    });
+  });
+}
+
+function devolverDeVale() {
+  const v = S.valeAbierto;
+  nuevoVale("devolucion", {
+    cliente_id: v.cliente_id, cotizacion_id: v.cotizacion_id, obra: v.obra,
+    vale_origen_id: v.id, vale_origen_folio: v.folio, recibio_tel: "",
+    partidas: v.partidas.map((p) => {
+      const c = S.catalogo.find((x) => x.id === p.item_id) || {};
+      return { item_id: p.item_id, clave: p.clave, descripcion: p.descripcion, unidad: p.unidad,
+               existencia: Number(c.existencia || 0), cantidad: 0 };
+    }),
+  });
+}
+
+async function cancelarVale() {
+  const v = S.valeAbierto;
+  const motivo = prompt(`¿Cancelar el vale ${v.folio}?\nEl material se regresa al almacén con movimientos inversos y el vale queda marcado.\n\nEscribe el motivo:`);
+  if (motivo === null) return;
+  if (!motivo.trim()) return alert("Escribe el motivo de la cancelación.");
+  try {
+    const { vale } = await api(`vale/${v.id}/cancelar`, { method: "POST", body: { motivo } });
+    await cargarCatalogo();
+    abrirVale(vale.id, vale);
+    if (vistaActual === "inv") pintarSegInv();
+  } catch (x) { alert(x.message); }
+}
+
+/* ---------- documento imprimible del vale ----------
+   Documento INTERNO de Marcelestial: sí lleva su marca. Es el papel que se
+   firma en la entrega y el que se archiva por obra. */
+function imprimirVale() {
+  const v = S.valeAbierto;
+  if (!v) return;
+  cerrarModal();
+  $("#doc").innerHTML = hojaVale(v) + (S.demo ? '<div class="pie-demo">Documento generado en el sitio de demostración · datos ficticios</div>' : "");
+  abrirPrevia(v.folio);
+}
+
+function hojaVale(v) {
+  const total = v.partidas.reduce((a, p) => a + Number(p.cantidad), 0);
+  const entrada = v.tipo === "entrada";
+  const fila = (etq, val) => val ? `<div><span>${etq}</span><b>${esc(val)}</b></div>` : "";
+  const titulo = { salida: "VALE DE SALIDA DE ALMACÉN", entrada: "VALE DE ENTRADA DE ALMACÉN", devolucion: "VALE DE DEVOLUCIÓN A ALMACÉN" }[v.tipo];
+  const leyenda = {
+    salida: "Quien recibe declara haber revisado y recibido el material descrito, en la cantidad y condiciones indicadas. A partir de este momento el material queda bajo su resguardo y responsabilidad. Cualquier faltante o daño debe reportarse al momento de la entrega.",
+    entrada: "Se hace constar la recepción del material descrito en el almacén de Comercializadora Marcelestial S.A.S., en la cantidad indicada. Las diferencias contra la remisión o factura del proveedor se anotan en observaciones.",
+    devolucion: "Se hace constar la devolución al almacén del material sobrante de la obra indicada, en la cantidad y condiciones descritas.",
+  }[v.tipo];
+  return `
+    <div class="hoja vale ${v.cancelado_en ? "cancelado" : ""}">
+      <div class="dh">
+        <div>
+          <h1>${titulo}</h1>
+          <div style="font-size:11.5px;color:#6b7280;margin-top:4px">Comercializadora Marcelestial S.A.S. · Perfiles de aluminio para sistemas fotovoltaicos</div>
+        </div>
+        <img src="/icons/logo.png" alt="">
+      </div>
+
+      <div class="vale-folio">
+        <div><span>Folio</span><b>${esc(v.folio)}</b></div>
+        <div><span>Fecha</span><b>${fecha(v.fecha)}</b></div>
+        <div><span>Tipo</span><b>${TIPO_VALE[v.tipo]}</b></div>
+      </div>
+      ${v.cancelado_en ? `<div class="sello">CANCELADO</div>` : ""}
+
+      <h2>${entrada ? "Origen" : "Destino"}</h2>
+      <div class="campos">
+        ${fila("Cliente", v.cliente)}
+        ${fila(entrada ? "Proveedor / origen" : "Obra / destino", v.obra)}
+        ${fila("Dirección del cliente", v.cliente_direccion)}
+        ${fila("Cotización", v.cotizacion)}
+        ${fila(entrada ? "Remisión / factura" : "Referencia", v.referencia)}
+        ${fila("Vale de salida original", v.vale_origen)}
+      </div>
+
+      <h2>Material</h2>
+      <table>
+        <tr><th style="width:26px">#</th><th style="width:80px">Clave</th><th>Descripción</th><th class="n" style="width:80px">Cantidad</th><th style="width:52px">Unidad</th></tr>
+        ${v.partidas.map((p, i) => `<tr>
+          <td>${i + 1}</td><td><b>${esc(p.clave)}</b></td><td>${esc(p.descripcion)}</td>
+          <td class="n"><b>${Number(p.cantidad).toLocaleString("es-MX")}</b></td><td>${esc(p.unidad)}</td></tr>`).join("")}
+        <tr class="tot"><td colspan="3">TOTAL DE PIEZAS · ${v.partidas.length} ${v.partidas.length === 1 ? "concepto" : "conceptos"}</td>
+          <td class="n">${total.toLocaleString("es-MX")}</td><td></td></tr>
+      </table>
+
+      ${v.notas ? `<h2>Observaciones</h2><p style="font-size:11.5px;line-height:1.55">${esc(v.notas)}</p>` : ""}
+
+      <p class="vale-leyenda">${leyenda}</p>
+
+      <div class="firmas">
+        <div class="firma-bloque">
+          <div class="linea">${entrada ? "" : ""}</div>
+          <b>Entregó</b>
+          <span>${esc(v.entrego_nombre)}</span>
+        </div>
+        <div class="firma-bloque">
+          <div class="linea">${v.recibio_firma ? `<img src="${v.recibio_firma}" alt="Firma">` : ""}</div>
+          <b>Recibió</b>
+          <span>${esc(v.recibio_nombre)}${v.recibio_tel ? " · " + esc(v.recibio_tel) : ""}</span>
+        </div>
+      </div>
+
+      <div class="pie">
+        <b>Comercializadora Marcelestial S.A.S.</b> · WhatsApp 55 7657 4769 · contacto@marcelestial.net · www.marcelestial.net<br>
+        Capturó ${esc(v.capturo || "")} · ${fecha(v.creado_en)}${v.creado_en ? " " + new Date(v.creado_en).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" }) : ""} ·
+        Original: almacén · Copia: quien recibe
+      </div>
+    </div>`;
+}
+
+/* ---------- firma en pantalla ----------
+   Un lienzo blanco donde quien recibe firma con el dedo. Se guarda como PNG
+   chico dentro del vale. Si nadie firma, no se manda nada. */
+function iniciarFirma(id) {
+  const cv = $("#" + id);
+  if (!cv) return;
+  const ctx = cv.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.lineWidth = 3; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#0A2A5E";
+  cv.dataset.trazos = "0";
+  let dibujando = false;
+  const punto = (ev) => {
+    const r = cv.getBoundingClientRect();
+    return [(ev.clientX - r.left) * (cv.width / r.width), (ev.clientY - r.top) * (cv.height / r.height)];
+  };
+  cv.addEventListener("pointerdown", (ev) => {
+    ev.preventDefault(); dibujando = true; cv.setPointerCapture(ev.pointerId);
+    const [x, y] = punto(ev); ctx.beginPath(); ctx.moveTo(x, y);
+  });
+  cv.addEventListener("pointermove", (ev) => {
+    if (!dibujando) return; ev.preventDefault();
+    const [x, y] = punto(ev); ctx.lineTo(x, y); ctx.stroke();
+    cv.dataset.trazos = String(Number(cv.dataset.trazos) + 1);
+  });
+  const fin = () => { dibujando = false; };
+  cv.addEventListener("pointerup", fin);
+  cv.addEventListener("pointercancel", fin);
+  cv.addEventListener("pointerleave", fin);
+}
+
+function limpiarFirma(id) {
+  const cv = $("#" + id);
+  if (!cv) return;
+  const ctx = cv.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.width, cv.height);
+  cv.dataset.trazos = "0";
+}
+
+function firmaDataUrl(id) {
+  const cv = $("#" + id);
+  if (!cv || Number(cv.dataset.trazos || 0) < 3) return null;
+  return cv.toDataURL("image/png");
+}
+
+/* ---------- kardex ---------- */
+async function verKardex() {
+  const caja = $("#invKardex");
+  if (!caja.querySelector("#kxItem")) {
+    const items = S.catalogo.filter((c) => c.controla_inventario);
+    caja.innerHTML = `
+      <div class="card" style="padding:12px 14px">
+        <div class="grid2">
+          <label class="f"><span>Concepto</span><select id="kxItem"><option value="">Todos</option>
+            ${items.map((c) => `<option value="${c.id}">${esc(c.clave)} · ${esc(c.descripcion)}</option>`).join("")}</select></label>
+          <label class="f"><span>Tipo</span><select id="kxTipo"><option value="">Todos</option>
+            <option value="salida">Salidas</option><option value="entrada">Entradas</option>
+            <option value="devolucion">Devoluciones</option><option value="ajuste">Ajustes</option></select></label>
+        </div>
+        ${campoCliente("kxCliente", "", "Cliente")}
+        <div class="grid2">
+          <label class="f"><span>Desde</span><input type="date" id="kxDesde"></label>
+          <label class="f"><span>Hasta</span><input type="date" id="kxHasta"></label>
+        </div>
+        <label class="f" style="margin-bottom:6px"><span>Texto</span>
+          <input id="kxQ" type="search" placeholder="Obra, folio de vale, quien recibió…"></label>
+        <button class="btn pri sm full" onclick="pintarKardex()">Consultar</button>
+      </div>
+      <div id="kxTotales"></div>
+      <div id="kxLista"></div>`;
+    activarBuscadorCliente("kxCliente");
+    $("#kxCliente").addEventListener("change", pintarKardex);
+    ["kxItem", "kxTipo"].forEach((id) => $("#" + id).addEventListener("change", pintarKardex));
+    $("#kxQ").addEventListener("keydown", (ev) => { if (ev.key === "Enter") pintarKardex(); });
+  }
+  pintarKardex();
+}
+
+async function pintarKardex() {
+  const lista = $("#kxLista");
+  if (!lista) return;
+  lista.innerHTML = '<div class="cargando">Consultando…</div>';
+  const q = new URLSearchParams({
+    item: $("#kxItem").value || "", tipo: $("#kxTipo").value || "", cliente: $("#kxCliente").value || "",
+    desde: $("#kxDesde").value || "", hasta: $("#kxHasta").value || "", q: $("#kxQ").value.trim(), tope: "300",
+  });
+  try {
+    const r = await api("inventario/movimientos?" + q.toString());
+    const movs = r.movimientos || [];
+    const filtrado = [...q.values()].some((x) => x && x !== "300");
+    $("#kxTotales").innerHTML = !movs.length ? "" : `
+      <div class="card" style="padding:12px 14px">
+        <h3 style="margin-bottom:6px">${filtrado ? "Totales de lo filtrado" : "Totales de los últimos movimientos"}</h3>
+        ${r.totales.map((t) => `<div class="row between" style="padding:6px 0;border-bottom:1px dashed var(--line);font-size:13px">
+          <div style="min-width:0;flex:1"><b>${esc(t.clave)}</b> <span style="color:var(--slate)">${esc(t.descripcion)}</span></div>
+          <div style="text-align:right;white-space:nowrap;flex:none">
+            <span style="color:var(--ok)">+${t.entradas.toLocaleString("es-MX")}</span> ·
+            <span style="color:var(--bad)">−${t.salidas.toLocaleString("es-MX")}</span>
+            <span style="color:var(--slate);font-size:11px"> ${esc(t.unidad)}</span></div></div>`).join("")}
+      </div>`;
+    lista.innerHTML = !movs.length
+      ? `<div class="sin-resultados">No hay movimientos que coincidan.</div>`
+      : movs.map((m) => {
+          const sale = m.tipo === "salida";
+          const ajuste = m.tipo === "ajuste";
+          return `<div class="item" ${m.vale_id ? `onclick="abrirVale(${m.vale_id})"` : 'style="cursor:default"'}>
+            <div class="m"><b>${esc(m.clave)} · ${TIPO_MOV[m.tipo] || m.tipo}${m.vale ? " · " + esc(m.vale) : ""}${m.vale_cancelado ? " · vale cancelado" : ""}</b>
+              <span>${fecha(m.fecha)}${m.cliente ? " · " + esc(m.cliente) : ""}${m.obra ? " · " + esc(m.obra) : ""}</span>
+              <span>${m.recibio_nombre ? (m.tipo === "entrada" && !m.vale_origen_id ? "Entregó " + esc(m.entrego_nombre) + " · recibió " : "Recibió ") + esc(m.recibio_nombre) : (m.motivo ? esc(m.motivo) : "")}</span></div>
+            <div class="r"><b style="color:${sale ? "var(--bad)" : ajuste ? "var(--slate)" : "var(--ok)"}">${ajuste ? "=" : sale ? "−" : "+"}${Number(m.cantidad).toLocaleString("es-MX")}</b>
+              <span style="font-size:11px;color:var(--slate)">saldo ${Number(m.saldo).toLocaleString("es-MX")}</span></div>
+          </div>`;
+        }).join("") +
+        (r.recortada ? `<div class="nota-tope">Se muestran ${movs.length} de ${r.encontradas}. Acota por fechas o concepto para ver el resto.</div>` : "");
+  } catch (e) { lista.innerHTML = `<div class="vacio">${esc(e.message)}</div>`; }
+}
+
+/* Dentro de la ficha del cliente: el material que se le ha entregado. */
+async function pintarValesDeCliente(clienteId) {
+  const caja = $("#valCli");
+  if (!caja) return;
+  try {
+    const r = await api(`vales?cliente=${clienteId}&tope=100`);
+    if (!$("#valCli")) return;
+    const lista = (r.vales || []);
+    const piezas = lista.filter((v) => v.tipo === "salida" && !v.cancelado_en).reduce((a, v) => a + Number(v.piezas), 0);
+    $("#valCli").innerHTML = `
+      <h4>Material entregado</h4>
+      ${lista.length ? `<div class="resumen">${lista.length} ${lista.length === 1 ? "vale" : "vales"} · ${piezas.toLocaleString("es-MX")} piezas entregadas</div>` : ""}
+      ${lista.length ? lista.map(tarjetaVale).join("")
+        : `<div class="vacio" style="padding:14px 0">Todavía no se le ha entregado material.</div>`}
+      ${mueveAlmacen() ? `<button class="btn sec full" type="button" style="margin-top:10px"
+        onclick="cerrarModal(); nuevoVale('salida', { cliente_id: ${clienteId} })">+ Nuevo vale de salida para este cliente</button>` : ""}`;
+  } catch (e) { if ($("#valCli")) $("#valCli").innerHTML = `<div class="vacio">${esc(e.message)}</div>`; }
 }
 
 /* ---------------- más ---------------- */
@@ -3200,7 +4016,7 @@ function verMas() {
     <div class="card">
       <h3>Mi cuenta</h3>
       <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
-        ${esc(S.yo.nombre)} · ${esc(S.yo.correo)}<br>Perfil: ${esDueno() ? "Administrador general" : "Vendedor"}<br>
+        ${esc(S.yo.nombre)} · ${esc(S.yo.correo)}<br>Perfil: ${esDueno() ? "Administrador general" : ROL_NOMBRE[S.yo.rol] || "Vendedor"}<br>
         <span style="font-size:11.5px">Versión ${VERSION}</span></p>
       <div class="acciones">
         <button class="btn sec sm" onclick="formCorreo()">Cambiar correo</button>
@@ -3240,10 +4056,10 @@ function verMas() {
       <button class="btn pri sm" onclick="formInversores()">Configurar inversores</button>
     </div>
     <div class="card">
-      <h3>Vendedores</h3>
+      <h3>Usuarios</h3>
       <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
-        Da de alta al equipo y controla quién tiene acceso.</p>
-      <button class="btn pri sm" onclick="verUsuarios()">Administrar vendedores</button>
+        Vendedores, almacén y administradores: da de alta al equipo y controla quién tiene acceso.</p>
+      <button class="btn pri sm" onclick="verUsuarios()">Administrar usuarios</button>
     </div>
     <div class="card">
       <h3>Clientes repetidos</h3>
@@ -3262,7 +4078,7 @@ function verMas() {
         clientes y las cotizaciones de ejemplo.</p>
       <button class="btn dan sm" onclick="reiniciarDemo(this)">Reiniciar la demostración</button>
     </div>` : ""}
-    <div class="card">
+    ${esDueno() ? `<div class="card">
       <h3>Datos de ejemplo</h3>
       <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
         Carga clientes, cotizaciones y movimientos ficticios para ver cómo se ve la app trabajando
@@ -3271,7 +4087,7 @@ function verMas() {
         <button class="btn pri sm" onclick="datosEjemplo('cargar')">Cargar ejemplos</button>
         <button class="btn dan sm" onclick="datosEjemplo('borrar')">Borrar ejemplos</button>
       </div>
-    </div>
+    </div>` : ""}
     <div class="card">
       <h3>Instalar en el celular</h3>
       <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
@@ -3374,13 +4190,14 @@ function formConcepto(id = null) {
 async function verUsuarios() {
   try {
     const { usuarios } = await api("usuarios");
-    abrirModal("Vendedores", `
-      <button class="btn pri sm" style="margin-bottom:12px" onclick="formUsuario()">+ Nuevo vendedor</button>
+    abrirModal("Usuarios", `
+      <button class="btn pri sm" style="margin-bottom:12px" onclick="formUsuario()">+ Nuevo usuario</button>
       ${usuarios.map((u) => `
         <div class="item" onclick="formUsuario(${u.id})">
           <div class="m"><b>${esc(u.nombre)}</b>
-          <span>${esc(u.correo)} · ${u.rol === "owner" ? "Administrador" : "Vendedor"}</span></div>
-          <div class="r"><b>${u.cotizaciones}</b>
+          <span>${esc(u.correo)} · ${ROL_NOMBRE[u.rol] || u.rol}</span></div>
+          <div class="r"><b>${u.rol === "almacen" ? u.vales : u.cotizaciones}</b>
+          <span style="display:block;font-size:10px;color:var(--slate)">${u.rol === "almacen" ? "vales" : "cotizaciones"}</span>
           <span class="badge ${u.activo ? "b-ok" : "b-bajo"}">${u.activo ? "Activo" : "Inactivo"}</span></div>
         </div>`).join("")}`);
     window._usuarios = usuarios;
@@ -3389,9 +4206,15 @@ async function verUsuarios() {
 
 function formUsuario(id = null) {
   const u = id ? (window._usuarios || []).find((x) => x.id === id) || {} : {};
-  abrirModal(id ? "Editar vendedor" : "Nuevo vendedor", `
+  const rolActual = u.rol || "vendedor";
+  abrirModal(id ? "Editar usuario" : "Nuevo usuario", `
     <form id="fUsr">
       <label class="f"><span>Nombre *</span><input name="nombre" required value="${esc(u.nombre || "")}"></label>
+      <label class="f"><span>Puesto</span><select name="rol">
+        <option value="vendedor" ${rolActual === "vendedor" ? "selected" : ""}>Vendedor · cotiza y lleva sus clientes</option>
+        <option value="almacen" ${rolActual === "almacen" ? "selected" : ""}>Almacén · entradas, salidas y kardex; sin precios</option>
+        <option value="owner" ${rolActual === "owner" ? "selected" : ""}>Administrador · todo</option>
+      </select></label>
       <label class="f"><span>Correo *</span>
         <input name="correo" type="email" ${id ? "" : "required"} value="${esc(u.correo || "")}"></label>
       <label class="f"><span>Teléfono</span><input name="telefono" value="${esc(u.telefono || "")}"></label>
@@ -3403,7 +4226,7 @@ function formUsuario(id = null) {
       <button class="btn pri full" type="submit">Guardar</button>
     </form>
     ${id && id !== S.yo.id ? `<div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--line)">
-      <button class="btn dan full" onclick="eliminarUsuario(${id})">Eliminar vendedor</button>
+      <button class="btn dan full" onclick="eliminarUsuario(${id})">Eliminar usuario</button>
       <p style="font-size:11.5px;color:var(--slate);margin-top:8px">
         Si solo quieres quitarle el acceso sin borrar nada, ponlo como Inactivo arriba.</p>
     </div>` : ""}`);
@@ -3637,6 +4460,9 @@ Object.assign(window, {
   buscarActualizacion, formTarifas,
   abrirDesdeCliente, nuevaParaCliente, verDuplicados, unirDuplicados,
   reiniciarDemo,
+  menuVale, nuevoVale, cerrarEditorVale, elegirConceptoVale, agregarConceptoVale, cantidadVale,
+  quitarPartidaVale, precargarDeCotizacion, guardarVale, abrirVale, formEntregaVale, devolverDeVale,
+  cancelarVale, imprimirVale, limpiarFirma, pintarKardex, pintarVales,
 });
 
 /* ---------------- service worker ---------------- */

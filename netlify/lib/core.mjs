@@ -38,7 +38,18 @@ export function verifyPassword(plain, stored) {
 }
 
 /* ---------------- token (JWT HS256 propio) ---------------- */
-const SECRET = process.env.JWT_SECRET || "cambiar-esta-llave-en-netlify";
+/* La llave de las sesiones viene SÓLO de la variable JWT_SECRET de Netlify.
+   Antes, si faltaba, se usaba un texto fijo del código: cualquiera que lo
+   conociera podía firmarse un token de administrador. Ahora, sin llave —o con
+   la llave vieja del código— la API se niega a trabajar y dice qué configurar. */
+const SECRET = String(process.env.JWT_SECRET || "");
+const LLAVE_VIEJA = "cambiar-esta-llave-en-netlify";
+export function problemaDeLlave() {
+  if (!SECRET) return "Falta la variable JWT_SECRET en Netlify (Site configuration → Environment variables).";
+  if (SECRET === LLAVE_VIEJA) return "JWT_SECRET todavía tiene el valor de ejemplo. Cámbiala por una llave propia de al menos 32 caracteres.";
+  if (SECRET.length < 32) console.warn("JWT_SECRET es corta: conviene una llave de al menos 32 caracteres.");
+  return null;
+}
 const b64u = (buf) => Buffer.from(buf).toString("base64url");
 
 export function signToken(payload, dias = 30) {
@@ -78,7 +89,15 @@ export async function sesion(req) {
   return u;
 }
 
-export const esDueno = (u) => u?.rol === "owner";
+/* ---------------- roles ----------------
+   owner     administrador general: todo
+   vendedor  cotiza y lleva sus clientes; ve existencias pero no mueve almacén
+   almacen   registra entradas y salidas (vales) y ve existencias; no cotiza ni ve precios */
+export const ROLES = ["owner", "vendedor", "almacen"];
+export const esDueno      = (u) => u?.rol === "owner";
+export const esAlmacen    = (u) => u?.rol === "almacen";
+export const esVendedor   = (u) => u?.rol === "vendedor";
+export const mueveAlmacen = (u) => esDueno(u) || esAlmacen(u);
 
 /* ---------------- utilidades ---------------- */
 export const num = (v) => {
@@ -106,19 +125,32 @@ export async function siguienteFolio() {
   return `MC-${anio}-${String((await ultimoFolio(anio)) + 1).padStart(4, "0")}`;
 }
 
+/* Folios de los vales de almacén: VS = salida, VE = entrada, VD = devolución.
+   Cada tipo lleva su propia numeración por año, igual que las cotizaciones. */
+export const PREFIJO_VALE = { salida: "VS", entrada: "VE", devolucion: "VD" };
+export async function siguienteFolioVale(tipo) {
+  const pre = PREFIJO_VALE[tipo] || "VS";
+  const anio = new Date().getFullYear();
+  const [r] = await db.sql`
+    SELECT COALESCE(MAX(NULLIF(regexp_replace(substring(folio from 9), '[^0-9]', '', 'g'), '')::int), 0) AS n
+      FROM vales
+     WHERE folio LIKE ${pre + "-" + anio + "-%"}`;
+  return `${pre}-${anio}-${String(Number(r?.n || 0) + 1).padStart(4, "0")}`;
+}
+
 /* Un folio repetido todavía puede colarse si dos vendedores guardan en el mismo
    instante. En ese caso se vuelve a intentar con el siguiente número. */
 export const esFolioRepetido = (e) =>
-  /duplicate key|23505|cotizaciones_folio/i.test(
+  /duplicate key|23505|cotizaciones_folio|vales_folio/i.test(
     [e?.message, e?.detail, e?.constraint,
      e?.cause?.message, e?.cause?.detail, e?.cause?.constraint].filter(Boolean).join(" ")
   );
 
-export async function conFolio(intentar, intentos = 8) {
+export async function conFolio(intentar, intentos = 8, siguiente = siguienteFolio) {
   let ultimo = null;
   for (let i = 0; i < intentos; i++) {
     try {
-      return await intentar(await siguienteFolio());
+      return await intentar(await siguiente());
     } catch (e) {
       if (!esFolioRepetido(e)) throw e;
       ultimo = e;
@@ -159,6 +191,16 @@ export function totalDePartidas(partidas) {
 /* Foto del recibo: sólo se acepta una imagen en formato data URL y con un tamaño
    razonable. Cualquier otra cosa se descarta, para que nadie meta basura en la
    base de datos. Alrededor de 4 MB de texto equivalen a 3 MB de imagen. */
+/* Firma trazada en pantalla: PNG en data URL y chica (menos de 80 KB).
+   No es una foto: si pesa más, algo raro se está mandando. */
+export function firmaValida(v) {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(s)) return null;
+  if (s.length > 80_000) return null;
+  return s;
+}
+
 export function fotoValida(v) {
   if (typeof v !== "string") return null;
   const s = v.trim();

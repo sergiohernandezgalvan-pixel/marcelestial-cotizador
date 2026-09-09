@@ -3,8 +3,12 @@
 Aplicación para generar, guardar y dar seguimiento a cotizaciones, con catálogo de precios
 central, directorio de clientes e inventario de perfiles y herrajes.
 
-- **Administrador general (dueño):** ve todo, define precios, da de alta vendedores, controla inventario.
+- **Administrador general (dueño):** ve todo, define precios, da de alta al equipo, controla inventario
+  y es el único que puede cancelar un vale.
 - **Vendedor:** ve únicamente sus propias cotizaciones y clientes; captura cantidades, no precios.
+  Consulta existencias, pero no mueve almacén.
+- **Almacén:** registra entradas, salidas y devoluciones de material, y consulta el kardex.
+  No cotiza y **no ve precios**: el servidor no se los manda.
 
 ---
 
@@ -46,7 +50,7 @@ A partir de ahí, cada cambio que subas se publica solo.
 3. Entra a **Más → Catálogo y precios** y captura los precios reales. Todos los conceptos
    nacen en $0.00 a propósito.
 4. Entra a **Más → Vendedores** y da de alta a tu equipo.
-5. En **Inventario**, registra la existencia inicial de perfiles y herrajes con un
+5. En **Almacén → Existencias**, registra la existencia inicial de perfiles y herrajes con un
    movimiento de tipo *Ajuste*.
 
 ## 4. Instalar en el celular
@@ -125,3 +129,75 @@ public/icons/                         íconos y logotipos
 
 Todo cabe en el plan gratuito de Netlify para un equipo de este tamaño: 100 GB de tráfico,
 125 000 llamadas a funciones al mes y la base de datos Postgres incluida.
+
+---
+
+## Almacén: vales y kardex
+
+Toda salida de material se documenta con un **vale**. Un vale es un solo documento con folio que
+agrupa lo que salió en una misma entrega: 20 rieles + 40 ángulos + tornillería son **un** vale, no
+tres movimientos sueltos que después nadie relaciona.
+
+| Tipo | Folio | Qué hace |
+|---|---|---|
+| Salida | `VS-2026-0001` | Descuenta del almacén. A una obra, a un cliente o a una instalación propia. |
+| Entrada | `VE-2026-0001` | Suma al almacén. Material que llega de Alyex o del proveedor de herraje. |
+| Devolución | `VD-2026-0001` | Suma al almacén. Sobrante que regresa de una obra; se liga al vale de salida original. |
+
+Cada vale guarda **fecha, cliente, obra o destino, cotización (si la hay), quién entregó, quién
+recibió, su teléfono y su firma**. La firma se traza con el dedo en la pantalla y sale impresa en el
+documento.
+
+### Cómo se hace una salida
+
+1. **Almacén → botón +→ A obra o cliente.**
+2. Elige el cliente: aparecen sus cotizaciones. Al elegir una, un botón precarga los conceptos de
+   estructura que lleva. El almacenista ajusta lo que realmente sale.
+3. También se puede escribir la obra a mano, sin cotización: las instalaciones propias y las ventas
+   de mostrador no tienen cotización de por medio y así sí se pueden registrar.
+4. Captura quién entregó, quién recibió y —si está presente— su firma.
+5. Al guardar se descuenta el material y sale el documento para imprimir o mandar por WhatsApp.
+
+Si a un concepto no le alcanza la existencia, **el vale completo se rechaza** y no se descuenta nada:
+nunca queda una entrega a medias.
+
+### Corregir y cancelar
+
+Las personas, el teléfono, la firma y las notas se pueden corregir después. **Las cantidades no.**
+Para corregir una cantidad, el administrador cancela el vale —escribiendo el motivo— y se hace otro.
+Al cancelar, el material regresa al almacén con movimientos inversos y el vale queda marcado con su
+motivo. Así el kardex siempre cuadra con lo que pasó en el piso.
+
+### Kardex
+
+**Almacén → Kardex** responde las tres preguntas de siempre, con filtros por concepto, cliente, tipo
+y fechas:
+
+- ¿Cuánto 2442 se ha ido a la obra X?
+- ¿Qué material se le entregó al cliente Y en agosto?
+- ¿Quién recibió el vale VS-2026-0031?
+
+Los totales por concepto se calculan solos. En la base de datos existe la vista `kardex` para
+consultar lo mismo con SQL, sin pasar por la app.
+
+### Movimientos rápidos
+
+En **Existencias**, al tocar un concepto se registra una **entrada rápida** (sin vale) o un **ajuste
+de conteo**. Las salidas ya no se pueden hacer así, a propósito: una salida sin vale es material que
+sale del almacén sin que quede quién lo recibió.
+
+---
+
+## Seguridad
+
+- `JWT_SECRET` **ya no tiene valor por defecto**. Si falta, o si conserva el texto de ejemplo, la API
+  se detiene y dice exactamente qué configurar en Netlify. Verifícalo antes de desplegar: sin esa
+  variable no entra nadie, incluido tú.
+- Cinco intentos de contraseña fallidos bloquean la cuenta 15 minutos. Cambiar la contraseña levanta
+  el bloqueo.
+- Los errores del servidor ya no muestran la consulta ni los nombres de las tablas: sale una
+  referencia de seis letras que se busca en el registro de Netlify.
+- Borrar un concepto del catálogo que ya tiene historial lo **desactiva** en lugar de borrarlo. El
+  historial de entregas no se pierde nunca.
+- Los movimientos de inventario son atómicos: dos salidas simultáneas del mismo concepto ya no dejan
+  piezas fantasma en el sistema.
