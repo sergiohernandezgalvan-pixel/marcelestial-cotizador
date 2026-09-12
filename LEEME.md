@@ -79,6 +79,20 @@ Los precios del cálculo rápido se configuran en **Más → Cotizador rápido**
 precio por panel, por inversor, estructura por panel, material eléctrico por kWp,
 mano de obra por kWp, paneles por inversor y factor de producción de la zona.
 
+### Desde el recibo de CFE
+
+- **Tipos de panel.** Los que maneja la empresa: **710, 715 y 720 W** (migración 015; antes
+  salía un 725 W que no existe). Se editan en **Más → Cotizador fotovoltaico → Configurar
+  parámetros**. Son tres renglones fijos: se renombran, no se agregan ni se quitan.
+- **Precio por módulo.** Sale de la tabla **Más → Configurar tarifas**, por tarifa, tensión y
+  cantidad de módulos (por ejemplo GDMTH en 440 V: $11,500 hasta 99 módulos y $11,000 de ahí
+  en adelante). Para dar otro precio en una cotización concreta, el dueño escribe el número en
+  el campo **Precio por módulo** del formulario del recibo antes de guardar; el vendedor lo ve
+  pero no lo cambia.
+- El total es **módulos × precio por módulo**. Los módulos salen del consumo del recibo entre
+  los días del periodo; si se quiere cotizar menos (espacio en el techo), se escribe la cantidad
+  en **Módulos a cotizar**.
+
 ## Seguimiento
 
 Cada cotización tiene bitácora: se escriben notas fechadas ("le llamé, lo ve el viernes")
@@ -124,6 +138,19 @@ public/icons/                         íconos y logotipos
 - El servidor valida el rol en **cada** petición: un vendedor no puede leer ni editar
   cotizaciones ajenas aunque manipule la aplicación desde el navegador.
 - Los precios solo se pueden modificar con rol de administrador.
+
+## Seguridad de las sesiones
+
+- El token de sesión lleva escrita la **versión** de la cuenta (`usuarios.token_version`).
+  Cambiar la contraseña, cambiar el rol o dar de baja a alguien sube esa versión y **todos
+  los tokens viejos de esa persona dejan de servir al instante**, aunque no hayan vencido.
+  Es lo que hay que hacer cuando se pierde un teléfono: cambiarle la contraseña a esa cuenta.
+- A quien cambia su propia contraseña se le devuelve un token nuevo, así que no se le cae la
+  sesión donde está trabajando; las demás sí se cierran.
+- Las peticiones tienen un tope de **14 MB**. Cada foto ya venía limitada a 4 MB por separado.
+- `netlify.toml` publica `Content-Security-Policy` y `Permissions-Policy`. La política todavía
+  permite `'unsafe-inline'` en los scripts porque la app usa manejadores `onclick` escritos en
+  el HTML; moverlos a `addEventListener` es trabajo pendiente y deja la política estricta.
 
 ## Costo
 

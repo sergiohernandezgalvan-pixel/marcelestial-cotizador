@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.09.07";
+const VERSION = "2026.09.12";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -4129,8 +4129,12 @@ function formPassword() {
   $("#fPass").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     try {
-      await api("cambiar-password", { method: "POST", body: Object.fromEntries(new FormData(ev.target)) });
-      cerrarModal(); alert("Contraseña actualizada.");
+      /* Cambiar la contraseña cierra las otras sesiones de la cuenta. El
+         servidor devuelve un token nuevo para no tirar la sesión de aquí. */
+      const r = await api("cambiar-password", { method: "POST", body: Object.fromEntries(new FormData(ev.target)) });
+      if (r?.token) { S.token = r.token; localStorage.setItem("mc_token", r.token); }
+      cerrarModal();
+      alert("Contraseña actualizada. Si habías iniciado sesión en otro teléfono, ahí ya se cerró.");
     } catch (x) { aviso("#modalError", x.message); }
   });
 }

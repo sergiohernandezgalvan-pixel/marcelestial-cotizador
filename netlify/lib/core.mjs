@@ -84,9 +84,17 @@ export async function sesion(req) {
   const datos = readToken(token);
   if (!datos?.uid) return null;
   const [u] = await db.sql`
-    SELECT id, correo, nombre, rol, activo FROM usuarios WHERE id = ${datos.uid} LIMIT 1`;
+    SELECT id, correo, nombre, rol, activo, token_version
+      FROM usuarios WHERE id = ${datos.uid} LIMIT 1`;
   if (!u || !u.activo) return null;
-  return u;
+  /* Revocación: el token trae la versión con la que se firmó. Si la cuenta
+     subió de versión —cambio de contraseña, cambio de rol, baja— el token
+     viejo ya no sirve aunque todavía no haya vencido. Los tokens emitidos
+     antes de esta migración no traen tv; se aceptan una vez y el siguiente
+     inicio de sesión ya los deja al corriente. */
+  if (datos.tv !== undefined && Number(datos.tv) !== Number(u.token_version)) return null;
+  const { token_version, ...limpioU } = u;
+  return limpioU;
 }
 
 /* ---------------- roles ----------------

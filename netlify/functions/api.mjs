@@ -150,9 +150,22 @@ export default async (req) => {
   const url = new URL(req.url);
   const ruta = url.pathname.replace(/^\/api\/?/, "").replace(/\/$/, "");
   const metodo = req.method.toUpperCase();
-  const cuerpo = ["POST", "PATCH", "PUT"].includes(metodo)
-    ? await req.json().catch(() => ({}))
-    : {};
+  /* Tope al tamaño de la petición. Cada foto ya viene limitada a 4 MB por
+     separado (fotoValida), pero una cotización lleva tres —recibo, dron y
+     equipo— y nada impedía mandar un cuerpo de decenas de megas para inflar
+     la base o tumbar la función. 14 MB deja pasar el caso real más pesado. */
+  const TOPE_CUERPO = 14 * 1024 * 1024;
+  const largo = Number(req.headers.get("content-length") || 0);
+  if (largo > TOPE_CUERPO)
+    return err("El envío es demasiado grande. Vuelve a tomar las fotos con menos calidad.", 413);
+  let cuerpo = {};
+  if (["POST", "PATCH", "PUT"].includes(metodo)) {
+    const texto = await req.text().catch(() => "");
+    if (texto.length > TOPE_CUERPO)
+      return err("El envío es demasiado grande. Vuelve a tomar las fotos con menos calidad.", 413);
+    try { cuerpo = JSON.parse(texto || "{}"); } catch { cuerpo = {}; }
+    if (cuerpo === null || typeof cuerpo !== "object" || Array.isArray(cuerpo)) cuerpo = {};
+  }
 
   try {
     /* Sin llave de sesiones no se trabaja. Mejor un aviso claro que una app
@@ -177,8 +190,8 @@ export default async (req) => {
       const [u] = await db.sql`
         INSERT INTO usuarios (correo, nombre, rol, password_hash)
         VALUES (${correo}, ${nombre}, 'owner', ${hashPassword(pass)})
-        RETURNING id, correo, nombre, rol`;
-      return json({ token: signToken({ uid: u.id }), usuario: u });
+        RETURNING id, correo, nombre, rol, token_version`;
+      return json({ token: signToken({ uid: u.id, tv: u.token_version }), usuario: u });
     }
 
     /* Freno a la fuerza bruta: 5 fallos seguidos bloquean la cuenta 15 minutos.
@@ -216,7 +229,7 @@ export default async (req) => {
         await db.sql`UPDATE usuarios SET intentos_fallidos = 0, bloqueado_hasta = NULL WHERE id = ${u.id}`;
 
       return json({
-        token: signToken({ uid: u.id }),
+        token: signToken({ uid: u.id, tv: u.token_version }),
         usuario: { id: u.id, correo: u.correo, nombre: u.nombre, rol: u.rol },
       });
     }
@@ -233,9 +246,15 @@ export default async (req) => {
       const [u] = await db.sql`SELECT password_hash FROM usuarios WHERE id = ${yo.id}`;
       if (!verifyPassword(cuerpo.actual || "", u.password_hash))
         return err("La contraseña actual no es correcta.", 403);
-      await db.sql`UPDATE usuarios SET password_hash = ${hashPassword(nueva)},
-                                       intentos_fallidos = 0, bloqueado_hasta = NULL WHERE id = ${yo.id}`;
-      return json({ ok: true });
+      /* Cambiar la contraseña cierra las demás sesiones de esta cuenta: el
+         teléfono perdido deja de servir. A quien la cambió se le devuelve un
+         token nuevo para que no se le caiga la sesión donde está trabajando. */
+      const [act] = await db.sql`
+        UPDATE usuarios SET password_hash = ${hashPassword(nueva)},
+                            intentos_fallidos = 0, bloqueado_hasta = NULL,
+                            token_version = token_version + 1
+        WHERE id = ${yo.id} RETURNING token_version`;
+      return json({ ok: true, token: signToken({ uid: yo.id, tv: act.token_version }) });
     }
 
 
@@ -288,7 +307,8 @@ export default async (req) => {
           if (String(cuerpo.password).length < 8) return err("Contraseña demasiado corta.");
           /* Cambiar la contraseña también levanta el bloqueo por intentos fallidos. */
           await db.sql`UPDATE usuarios SET password_hash = ${hashPassword(cuerpo.password)},
-                                           intentos_fallidos = 0, bloqueado_hasta = NULL WHERE id = ${id}`;
+                                           intentos_fallidos = 0, bloqueado_hasta = NULL,
+                                           token_version = token_version + 1 WHERE id = ${id}`;
         }
         /* Cambio de rol: ahora sí se puede promover o cambiar de puesto a una
            cuenta existente. El único candado: nunca quedarse sin administrador. */
@@ -300,7 +320,8 @@ export default async (req) => {
             const [q] = await db.sql`SELECT COUNT(*)::int AS n FROM usuarios WHERE rol = 'owner' AND activo AND id <> ${id}`;
             if ((q?.n || 0) < 1) return err("No puedes quitarle el rol al único administrador. Nombra otro primero.");
           }
-          await db.sql`UPDATE usuarios SET rol = ${cuerpo.rol} WHERE id = ${id}`;
+          await db.sql`UPDATE usuarios SET rol = ${cuerpo.rol},
+                                           token_version = token_version + 1 WHERE id = ${id}`;
         }
         const correoNuevo = limpio(cuerpo.correo, 120)?.toLowerCase();
         if (correoNuevo) {
@@ -314,7 +335,9 @@ export default async (req) => {
           UPDATE usuarios SET
             nombre   = COALESCE(${limpio(cuerpo.nombre, 120)}, nombre),
             telefono = COALESCE(${limpio(cuerpo.telefono, 40)}, telefono),
-            activo   = COALESCE(${typeof cuerpo.activo === "boolean" ? cuerpo.activo : null}, activo)
+            activo   = COALESCE(${typeof cuerpo.activo === "boolean" ? cuerpo.activo : null}, activo),
+            /* Dar de baja una cuenta cierra la sesión que traiga abierta. */
+            token_version = token_version + ${cuerpo.activo === false ? 1 : 0}
           WHERE id = ${id}`;
         return json({ ok: true });
       }
