@@ -1,0 +1,45 @@
+[build]
+  publish = "public"
+  command = "echo 'sitio estatico + funciones'"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+# La aplicación nunca se guarda en el caché del navegador: cada actualización que se
+# publica tiene que llegar al teléfono del vendedor. Los íconos sí se cachean.
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/app.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/styles.css"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "geolocation=(), microphone=(), payment=(), usb=()"
+    # Política de contenido. Bloquea que la página cargue código de otro sitio y
+    # que mande datos a un servidor ajeno, que es como termina una inyección de
+    # código en robo de información. Las imágenes llevan data: y blob: porque
+    # las fotos del recibo y del dron viajan como data URL.
+    # Nota: 'unsafe-inline' en script-src sigue ahí porque la app usa manejadores
+    # onclick escritos en el HTML. Quitarlos es trabajo aparte y entonces esta
+    # política pasa a ser estricta.
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"

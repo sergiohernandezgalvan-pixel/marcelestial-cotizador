@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
+<meta name="theme-color" content="#0A2A5E">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Marcelestial">
+<title>Cotizador · Marcelestial</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<!-- Aviso del sitio de demostración. Sólo se ve si Netlify tiene MODO_DEMO = 1. -->
+<div class="cinta-demo" id="cintaDemo" hidden>
+  MODO DEMOSTRACIÓN · los datos son ficticios
+</div>
+
+<!-- ============ ACCESO ============ -->
+<div class="gate" id="gate">
+  <div class="gate-card">
+    <img class="gate-logo" src="/icons/logo.png" alt="Marcelestial">
+    <div class="filo"></div>
+    <h1 id="gateTitulo">Cotizador Marcelestial</h1>
+    <p class="sub" id="gateSub">Ingresa con tu cuenta de vendedor</p>
+    <div class="aviso err" id="gateError"></div>
+
+    <form id="formLogin">
+      <label class="f"><span>Correo</span><input type="email" name="correo" autocomplete="username" required></label>
+      <label class="f"><span>Contraseña</span><input type="password" name="password" autocomplete="current-password" required></label>
+      <button class="btn pri full" type="submit">Entrar</button>
+    </form>
+
+    <form id="formSetup" hidden>
+      <label class="f"><span>Tu nombre</span><input name="nombre" required></label>
+      <label class="f"><span>Correo</span><input type="email" name="correo" required></label>
+      <label class="f"><span>Contraseña (mínimo 8)</span><input type="password" name="password" minlength="8" required></label>
+      <button class="btn pri full" type="submit">Crear cuenta de administrador</button>
+    </form>
+
+    <!-- Activación por invitación: la persona llega aquí desde el enlace que le
+         enviaron y elige su propia contraseña. Nadie más la conoce. -->
+    <form id="formActivar" hidden>
+      <div class="f"><span>Tu cuenta</span><div id="activarQuien" class="dato-fijo"></div></div>
+      <label class="f"><span>Elige tu contraseña (mínimo 8)</span>
+        <input type="password" name="password" minlength="8" required autocomplete="new-password"></label>
+      <label class="f"><span>Escríbela otra vez</span>
+        <input type="password" name="password2" minlength="8" required autocomplete="new-password"></label>
+      <button class="btn pri full" type="submit">Entrar por primera vez</button>
+    </form>
+  </div>
+
+  <!-- Firma de quien hizo la aplicación. Se queda fija aunque la instalación
+       lleve la marca de otra empresa: es el crédito del desarrollador. -->
+  <div class="credito">
+    <img src="/icons/logo-blanco.png" alt="">
+    <span>Una aplicación de<br><b>Comercializadora Marcelestial S.A.S.</b></span>
+  </div>
+</div>
+
+<!-- ============ APLICACIÓN ============ -->
+<div class="app" id="app">
+  <header class="top">
+    <img src="/icons/logo-blanco.png" alt="">
+    <div class="t"><b>Cotizador</b><span id="quienSoy"></span></div>
+    <button class="btn sec sm" id="btnSalir">Salir</button>
+  </header>
+
+  <!-- Panel -->
+  <section class="vista" id="v-panel" hidden>
+    <h2 class="tit">Panel</h2>
+    <p class="des" id="panelDes">Resumen de tu actividad</p>
+    <div class="grid3" id="panelKpis"></div>
+    <div id="panelExtra"></div>
+  </section>
+
+  <!-- Cotizaciones -->
+  <section class="vista" id="v-cot" hidden>
+    <h2 class="tit">Cotizaciones</h2>
+    <p class="des" id="cotDes">Tus propuestas técnico-económicas</p>
+    <div class="buscador">
+      <input id="qCot" type="search" autocomplete="off" inputmode="search"
+             placeholder="Buscar por cliente, folio o No. de servicio (RPU)">
+      <span id="qCotCuenta"></span>
+    </div>
+    <div id="listaCot"></div>
+  </section>
+
+  <!-- Clientes -->
+  <section class="vista" id="v-cli" hidden>
+    <h2 class="tit">Clientes</h2>
+    <p class="des">Directorio de clientes y prospectos</p>
+    <div class="buscador">
+      <input id="qCli" type="search" autocomplete="off" inputmode="search"
+             placeholder="Buscar por nombre, No. de servicio (RPU) o teléfono">
+      <span id="qCliCuenta"></span>
+    </div>
+    <div id="listaCli"></div>
+  </section>
+
+  <!-- Almacén: existencias, vales y kardex -->
+  <section class="vista" id="v-inv" hidden>
+    <h2 class="tit">Almacén</h2>
+    <p class="des" id="invDes">Perfiles y herrajes en existencia</p>
+    <div class="seg" id="invSeg" hidden>
+      <button data-s="exist" class="on">Existencias</button>
+      <button data-s="vales">Vales</button>
+      <button data-s="kardex">Kardex</button>
+    </div>
+    <div id="invExist"></div>
+    <div id="invVales" hidden></div>
+    <div id="invKardex" hidden></div>
+  </section>
+
+  <!-- Editor de vale de almacén -->
+  <section class="vista" id="v-vale" hidden></section>
+
+  <!-- Más -->
+  <section class="vista" id="v-mas" hidden>
+    <h2 class="tit">Más</h2>
+    <p class="des">Administración y cuenta</p>
+    <div id="masContenido"></div>
+  </section>
+
+  <!-- Editor de cotización -->
+  <section class="vista" id="v-editor" hidden></section>
+
+  <button class="fab" id="fab" hidden>+</button>
+
+  <nav class="tabs" id="tabs">
+    <button data-v="panel" class="on"><svg viewBox="0 0 24 24"><path d="M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 9h8V3h-8z"/></svg>Panel</button>
+    <button data-v="cot"><svg viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>Cotizar</button>
+    <button data-v="cli"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6"/></svg>Clientes</button>
+    <button data-v="inv"><svg viewBox="0 0 24 24"><path d="M3 8h18v3H3zM3 15h18v3H3zM7 11v4M17 11v4"/></svg>Almacén</button>
+    <button data-v="mas"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>Más</button>
+  </nav>
+</div>
+
+<!-- ============ MODAL ============ -->
+<div class="modal" id="modal" hidden>
+  <div class="box">
+    <div class="modal-head"><h3 id="modalTitulo"></h3>
+      <button class="modal-x" onclick="cerrarModal()" aria-label="Cerrar">&times;</button></div>
+    <div class="aviso err" id="modalError"></div>
+    <div id="modalCuerpo"></div>
+  </div>
+</div>
+
+<!-- ============ DOCUMENTO IMPRIMIBLE ============ -->
+<!-- La barra sólo se ve en la vista previa; al imprimir desaparece. -->
+<div class="previa-barra" id="previaBarra" hidden>
+  <button class="btn sec sm" onclick="cerrarPrevia()">← Volver</button>
+  <span id="previaFolio"></span>
+  <button class="btn pri sm" onclick="imprimirAhora()">Imprimir o guardar PDF</button>
+</div>
+<div id="doc"></div>
+
+<script src="/sitio.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,668 @@
+:root{
+  --navy:#04142E; --navy2:#0A2A5E; --blue:#2F6FC4; --sky:#4A90D8; --sky-l:#8CC4F0;
+  --amber:#F0A93C; --ink:#062247; --slate:#5A6B85; --paper:#F3F7FB; --line:#DAE4EF;
+  --ok:#137A4B; --warn:#B4661A; --bad:#B4241A;
+  --r:14px; --sh:0 1px 3px rgba(6,34,71,.08), 0 6px 18px rgba(6,34,71,.06);
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--paper);color:var(--ink);
+  font-size:15px;line-height:1.5;overscroll-behavior-y:none}
+img{max-width:100%;display:block}
+button,input,select,textarea{font:inherit;color:inherit}
+
+/* ---------- acceso ----------
+   Amanecer sobre un arreglo solar, dibujado con puro CSS: nada de fotos, para
+   que la pantalla abra al instante y funcione sin señal.
+   La tarjeta ocupa el centro, así que el ambiente vive en los extremos: el sol
+   naciente arriba a la derecha y el campo de paneles abajo, con la línea del
+   horizonte encendida entre los dos.
+   El cielo se queda oscuro y el color cálido sólo asoma, porque el mismo fondo
+   tiene que servir para un logo azul y para uno dorado. */
+.gate{
+  position:relative; overflow:hidden;
+  min-height:100dvh; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; padding:24px;
+  background:
+    radial-gradient(80% 40% at 80% 4%, rgba(255,205,130,.26) 0%, rgba(255,170,70,0) 62%),
+    radial-gradient(120% 40% at 50% 82%, rgba(60,140,235,.30) 0%, rgba(60,140,235,0) 70%),
+    linear-gradient(178deg, #020B1B 0%, #06203F 34%, #0A2F5C 62%, #0E3C72 82%, #0A2B52 100%);
+}
+
+/* el sol naciente, arriba a la derecha */
+.gate:before{
+  content:""; position:absolute; right:-22%; top:-20%;
+  width:86vw; height:86vw; max-width:520px; max-height:520px;
+  border-radius:50%;
+  background:radial-gradient(circle,
+    rgba(255,248,232,.62) 0%, rgba(255,222,160,.38) 16%,
+    rgba(255,188,92,.20) 38%, rgba(255,170,60,0) 70%);
+  animation:respira 12s ease-in-out infinite;
+  pointer-events:none;
+}
+
+/* el campo de paneles: retícula en perspectiva, con el horizonte encendido */
+.gate:after{
+  content:""; position:absolute; left:-30%; right:-30%; bottom:0; height:34%;
+  background-image:
+    repeating-linear-gradient(90deg, rgba(168,212,255,.28) 0 1px, transparent 1px 30px),
+    repeating-linear-gradient(0deg,  rgba(168,212,255,.22) 0 1px, transparent 1px 16px),
+    linear-gradient(180deg, rgba(10,40,80,.10) 0%, rgba(2,10,26,.72) 100%);
+  transform:perspective(260px) rotateX(70deg);
+  transform-origin:bottom center;
+  -webkit-mask-image:linear-gradient(180deg, transparent 0%, #000 22%, #000 100%);
+          mask-image:linear-gradient(180deg, transparent 0%, #000 22%, #000 100%);
+  pointer-events:none;
+}
+
+@keyframes respira{
+  0%,100%{ opacity:.82; transform:scale(1) }
+  50%    { opacity:1;   transform:scale(1.05) }
+}
+@media (prefers-reduced-motion: reduce){ .gate:before{ animation:none } }
+
+/* la tarjeta y el crédito van encima de las capas */
+.gate > *{position:relative; z-index:2}
+/* Crédito del desarrollador bajo la tarjeta de acceso. */
+.credito{display:flex;align-items:center;justify-content:center;gap:9px;
+  margin-top:20px;color:rgba(255,255,255,.62);font-size:11px;line-height:1.35;text-align:left}
+.credito img{width:26px;height:auto;opacity:.82;flex:none}
+.credito b{color:rgba(255,255,255,.88);font-weight:700}
+
+.gate-card{
+  width:100%; max-width:400px; padding:32px 26px 28px;
+  background:linear-gradient(180deg,#fff 0%,#FBFDFF 100%);
+  border-radius:22px; border:1px solid rgba(255,255,255,.55);
+  box-shadow:0 26px 70px rgba(2,10,26,.48), 0 2px 0 rgba(255,255,255,.7) inset;
+}
+.gate-logo{height:88px;margin:0 auto 18px;width:auto}
+.gate h1{font-size:19px;font-weight:700;text-align:center;margin-bottom:4px;letter-spacing:-.01em}
+.gate p.sub{text-align:center;color:var(--slate);font-size:13px;margin-bottom:20px}
+/* una línea de luz bajo el logo, para separarlo del formulario sin meter otra caja */
+.gate-card .filo{height:1px;margin:0 auto 18px;max-width:180px;
+  background:linear-gradient(90deg,transparent,rgba(47,111,196,.35),transparent)}
+
+/* ---------- estructura ---------- */
+.app{display:none;min-height:100dvh;padding-bottom:78px}
+.app.on{display:block}
+header.top{position:sticky;top:0;z-index:30;background:linear-gradient(120deg,var(--navy),var(--navy2));
+  color:#fff;padding:12px 16px;display:flex;align-items:center;gap:12px;
+  padding-top:calc(12px + env(safe-area-inset-top))}
+header.top img{height:34px;width:auto}
+header.top .t{flex:1;min-width:0}
+header.top .t b{display:block;font-size:15px;font-weight:700;line-height:1.2}
+header.top .t span{font-size:11px;color:var(--sky-l);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vista{padding:16px;max-width:900px;margin:0 auto}
+.vista[hidden]{display:none}
+h2.tit{font-size:20px;font-weight:700;margin-bottom:2px}
+p.des{color:var(--slate);font-size:13px;margin-bottom:16px}
+
+/* ---------- navegación ---------- */
+nav.tabs{position:fixed;bottom:0;left:0;right:0;z-index:40;background:#fff;border-top:1px solid var(--line);
+  display:grid;grid-template-columns:repeat(5,1fr);padding-bottom:env(safe-area-inset-bottom)}
+nav.tabs button{background:none;border:0;padding:9px 2px 8px;display:flex;flex-direction:column;align-items:center;
+  gap:3px;color:var(--slate);font-size:10.5px;font-weight:600;cursor:pointer}
+nav.tabs button svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+nav.tabs button.on{color:var(--blue)}
+
+/* ---------- tarjetas ---------- */
+.card{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:16px;box-shadow:var(--sh);margin-bottom:12px}
+.card h3{font-size:15px;font-weight:700;margin-bottom:10px}
+.row{display:flex;align-items:center;gap:12px}
+.row.between{justify-content:space-between}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+@media(max-width:520px){.grid3{grid-template-columns:1fr 1fr}}
+
+.kpi{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:14px;box-shadow:var(--sh)}
+.kpi b{display:block;font-size:22px;font-weight:800;color:var(--navy2);line-height:1.1}
+.kpi span{display:block;font-size:11px;color:var(--slate);margin-top:4px;text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+
+/* ---------- listas ---------- */
+.item{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:13px 14px;margin-bottom:9px;
+  box-shadow:var(--sh);cursor:pointer;display:flex;gap:12px;align-items:center}
+.item:active{transform:scale(.995)}
+.item .m{flex:1;min-width:0}
+.item .m b{display:block;font-size:14.5px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item .m span{display:block;font-size:12px;color:var(--slate);margin-top:2px}
+.item .r{text-align:right;flex:none}
+.item .r b{display:block;font-size:14px;font-weight:700}
+
+.badge{display:inline-block;padding:2px 9px;border-radius:99px;font-size:10.5px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.04em}
+.b-borrador{background:#EEF2F7;color:#5A6B85}
+.b-enviada{background:#E3EFFC;color:#1B5BA0}
+.b-negociacion{background:#FDF0DC;color:#8A5B14}
+.b-ganada{background:#DEF3E7;color:#137A4B}
+.b-perdida{background:#FBE4E2;color:#B4241A}
+.b-bajo{background:#FBE4E2;color:#B4241A}
+.b-ok{background:#DEF3E7;color:#137A4B}
+
+/* ---------- formularios ---------- */
+label.f,div.f{display:block;margin-bottom:11px}
+label.f span,div.f>span{display:block;font-size:11.5px;font-weight:700;color:var(--slate);margin-bottom:5px;
+  text-transform:uppercase;letter-spacing:.05em}
+input,select,textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:11px 12px;
+  background:#fff;font-size:15px;outline:none}
+input:focus,select:focus,textarea:focus{border-color:var(--sky);box-shadow:0 0 0 3px rgba(74,144,216,.15)}
+input[readonly]{background:#F1F5FA;color:var(--slate)}
+textarea{min-height:84px;resize:vertical}
+
+/* El atributo hidden debe ganarle a cualquier display propio (los .btn son inline-flex) */
+[hidden]{display:none !important}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;border:0;border-radius:11px;
+  padding:12px 18px;font-size:15px;font-weight:700;cursor:pointer;text-decoration:none}
+.btn.pri{background:var(--blue);color:#fff}
+.btn.pri:active{background:var(--navy2)}
+.btn.sec{background:#fff;color:var(--navy2);border:1px solid var(--line)}
+.btn.dan{background:#fff;color:var(--bad);border:1px solid #F3CFCB}
+.btn.full{width:100%}
+.btn.sm{padding:8px 13px;font-size:13px;border-radius:9px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.acciones{display:flex;gap:9px;flex-wrap:wrap;margin-top:6px}
+
+.fab{position:fixed;right:16px;bottom:calc(88px + env(safe-area-inset-bottom));z-index:35;
+  width:56px;height:56px;border-radius:50%;background:var(--blue);color:#fff;border:0;
+  box-shadow:0 8px 22px rgba(47,111,196,.45);font-size:30px;line-height:1;cursor:pointer}
+
+/* ---------- partidas ---------- */
+.partida{display:grid;grid-template-columns:1fr 74px 92px 30px;gap:8px;align-items:center;
+  padding:9px 0;border-bottom:1px dashed var(--line)}
+.partida .d{min-width:0}
+.partida .d b{display:block;font-size:13px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.partida .d span{font-size:11px;color:var(--slate)}
+.partida input{padding:7px 8px;font-size:13.5px;text-align:right}
+.partida .imp{text-align:right;font-weight:700;font-size:13.5px}
+.partida .x{background:none;border:0;color:var(--bad);font-size:19px;cursor:pointer;padding:0}
+.total-row{display:flex;justify-content:space-between;align-items:baseline;margin-top:14px;
+  padding-top:12px;border-top:2px solid var(--line)}
+.total-row span{font-size:12px;font-weight:700;color:var(--slate);text-transform:uppercase;letter-spacing:.06em}
+.total-row b{font-size:24px;font-weight:800;color:var(--navy2)}
+
+.spec{display:grid;grid-template-columns:1fr;gap:0}
+@media(min-width:620px){.spec{grid-template-columns:1fr 1fr;column-gap:26px}}
+.spec div{display:flex;justify-content:space-between;align-items:baseline;gap:14px;
+  padding:7px 0;border-bottom:1px dotted var(--line);font-size:13px;color:var(--slate)}
+.spec div b{font-weight:700;color:var(--ink);white-space:nowrap;text-align:right}
+
+/* ---------- modal ---------- */
+.modal{position:fixed;inset:0;z-index:60;background:rgba(4,20,46,.55);display:flex;align-items:flex-end;justify-content:center}
+.modal[hidden]{display:none}
+.modal .box{background:#fff;width:100%;max-width:560px;border-radius:20px 20px 0 0;padding:22px 18px;
+  max-height:92dvh;overflow:auto;padding-bottom:calc(22px + env(safe-area-inset-bottom))}
+@media(min-width:620px){.modal{align-items:center}.modal .box{border-radius:20px}}
+.modal h3{font-size:17px;font-weight:700}
+.modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+.modal-x{background:#F1F5FA;border:0;width:34px;height:34px;border-radius:50%;flex:none;
+  font-size:24px;line-height:1;color:var(--slate);cursor:pointer}
+.modal-x:active{background:var(--line)}
+
+.aviso{padding:11px 13px;border-radius:10px;font-size:13px;margin-bottom:12px;display:none}
+.aviso.on{display:block}
+.aviso.err{background:#FBE4E2;color:#8E1D15}
+.aviso.ok{background:#DEF3E7;color:#0E5C39}
+.vacio{text-align:center;color:var(--slate);font-size:13.5px;padding:34px 16px}
+.cargando{text-align:center;color:var(--slate);font-size:13px;padding:26px}
+
+/* ---------- buscador de listas ---------- */
+.buscador{position:relative;margin-bottom:12px}
+.buscador input{padding-right:96px;text-overflow:ellipsis}
+.buscador span{position:absolute;right:12px;top:50%;transform:translateY(-50%);
+  font-size:11.5px;font-weight:700;color:var(--slate);pointer-events:none}
+.sin-resultados{background:#fff;border:1px dashed var(--line);border-radius:var(--r);
+  padding:22px 16px;text-align:center;color:var(--slate);font-size:13.5px}
+
+/* En el directorio, el nombre completo se ve en dos renglones si hace falta:
+   con nombres largos y parecidos, cortarlos hacía imposible distinguirlos. */
+#listaCli .item .m b{white-space:normal;overflow:visible;line-height:1.28}
+#listaCli .item .r .badge{font-size:9.5px;padding:2px 7px}
+
+/* ---------- selector de cliente con buscador ---------- */
+.selcli{position:relative}
+.selcli .qcli{margin-bottom:7px;padding-right:74px}
+.selcli .cuenta{position:absolute;right:12px;top:11px;font-size:11.5px;font-weight:700;
+  color:var(--slate);pointer-events:none}
+.selcli select{width:100%}
+
+.nota-tope{background:#FFF6E6;border:1px solid #F3D9A6;border-radius:var(--r);
+  padding:11px 14px;margin-bottom:10px;font-size:12px;color:#6B4E17;line-height:1.5}
+
+/* ---------- cotizaciones dentro de la ficha del cliente ---------- */
+.cotcli{margin-top:20px;border-top:1px solid var(--line);padding-top:15px}
+.cotcli.arriba{margin:0 0 18px;border-top:none;border-bottom:1px solid var(--line);
+  padding:0 0 16px}
+.cotcli h4{font-size:13.5px;font-weight:700;margin:0}
+.cotcli .resumen{font-size:11.5px;color:var(--slate);margin:3px 0 11px}
+.cotcli .item{margin-bottom:7px}
+.cotcli .item:last-of-type{margin-bottom:0}
+.cotcli .vacio{padding:16px 0}
+
+/* ---------- vista previa en el techo ---------- */
+.sitio-lienzo{width:100%;height:auto;display:block;border-radius:var(--r);
+  border:1px solid var(--line);background:#EEF2F7;cursor:crosshair;touch-action:manipulation}
+.sitio-paso{font-size:12.5px;font-weight:600;color:var(--navy2);margin-bottom:8px}
+.sitio-nota{font-size:12px;color:var(--slate);line-height:1.5;margin:8px 0}
+.sitio-nota.bien{color:var(--ok)}
+.sitio-nota.mal{color:var(--warn);font-weight:600}
+.sitio-resultado{width:100%;height:auto;display:block;border-radius:var(--r);
+  border:1px solid var(--line);margin-top:12px}
+#cardSitio .campos{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+/* la guía para sacar la imagen de Google Maps cuando no hay dron */
+.sitio-guia{margin:12px 0 4px;border:1px solid var(--line);border-radius:var(--r);
+  background:#F7FAFD;overflow:hidden}
+.sitio-guia>summary{cursor:pointer;padding:10px 12px;font-size:12px;font-weight:600;
+  color:var(--navy2);list-style:none}
+.sitio-guia>summary::-webkit-details-marker{display:none}
+.sitio-guia>summary::before{content:"▸ ";color:var(--slate)}
+.sitio-guia[open]>summary::before{content:"▾ "}
+.sitio-guia ol{margin:0;padding:0 14px 4px 30px}
+.sitio-guia li{font-size:12px;color:var(--slate);line-height:1.55;margin-bottom:6px}
+.sitio-ojo{font-size:11.5px;color:var(--slate);line-height:1.55;margin:0 12px 10px;
+  padding:8px 10px;background:#FFF6E8;border-radius:8px;border:1px solid #F2DFC0}
+.sitio-fuente{display:flex;gap:9px;align-items:flex-start;margin:0 0 12px;
+  padding:9px 10px;background:#F1F6FC;border:1px solid var(--line);border-radius:var(--r)}
+.sitio-fuente input{margin-top:2px;width:17px;height:17px;flex:0 0 auto}
+.sitio-fuente span{font-size:11.5px;color:var(--slate);line-height:1.5}
+
+/* las áreas del techo: una por cada agua o superficie plana */
+.sitio-ayuda{font-size:11.5px;color:var(--slate);line-height:1.55;margin:0 0 10px}
+.sitio-area{border:1px solid var(--line);border-radius:var(--r);padding:10px 11px;margin-bottom:10px}
+.sitio-area-t{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.sitio-area-t b{font-size:12.5px;color:var(--navy2);display:flex;align-items:center;gap:7px}
+.sitio-area-t .pin{width:11px;height:11px;border-radius:3px;display:inline-block;flex:0 0 auto}
+.sitio-area .campos{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+#sitioAreas .f{margin-bottom:0}
+
+/* acomodar los paneles a mano */
+.acomodo{margin-top:4px}
+.acomodo-fila{display:flex;align-items:center;gap:10px;margin-bottom:7px}
+.acomodo-fila>span{font-size:11.5px;font-weight:700;color:var(--slate);
+  text-transform:uppercase;letter-spacing:.05em;flex:1;min-width:0}
+.acomodo-fila>b{font-size:16px;font-weight:800;min-width:28px;text-align:center}
+.acomodo-fila .btn{min-width:42px;padding:7px 0;font-size:17px;line-height:1}
+
+/* la hoja del techo dentro del documento imprimible.
+   Empieza en página nueva, igual que el anexo y la recuperación: si no,
+   el encabezado se queda al pie de la hoja anterior y el montaje se va solo. */
+#doc .hoja.sitio{page-break-before:always;break-before:page}
+#doc .hoja.sitio .foto-sitio{width:100%;border-radius:8px;display:block}
+#doc .hoja.sitio .foto-sitio,#doc .hoja.sitio>div{break-inside:avoid;page-break-inside:avoid}
+
+/* ---------- sitio de demostración ---------- */
+/* La cinta y el espacio que deja el cuerpo miden lo mismo a propósito: si no,
+   el encabezado se mete debajo de la cinta por uno o dos píxeles. */
+.cinta-demo{position:fixed;top:0;left:0;right:0;z-index:900;background:var(--amber);
+  color:#3A2408;font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
+  text-align:center;height:26px;line-height:26px;padding:0 12px;overflow:hidden;
+  box-shadow:0 1px 6px rgba(6,34,71,.18)}
+body.demo{padding-top:26px}
+body.demo header.top{top:26px}
+/* La leyenda del vencimiento no cabe en una línea en teléfono: que se encoja
+   en lugar de cortarse a la mitad de una palabra. */
+.cinta-demo{white-space:normal;line-height:1.3;padding:4px 10px;font-size:10.5px}
+@media (max-width:420px){ .cinta-demo{font-size:9.5px} }
+@media print{ .cinta-demo{display:none !important} }
+.pie-demo{display:none}
+body.demo .pie-demo{display:block;margin-top:10px;font-size:9px;color:#8A97A8;
+  font-style:italic;text-align:center}
+
+/* ---------- distintivos de la licencia de demostración ----------
+   Van sobre CADA hoja impresa, no sólo en la pantalla: una propuesta salida de
+   una demostración tiene que verse como tal cuando el cliente final la reciba
+   impresa o por correo. El sello es la advertencia; el candado real es que el
+   servidor deja de contestar cuando vence la licencia. */
+body.demo #doc .hoja{position:relative}
+body.demo #doc .hoja:after{
+  content:attr(data-sello);
+  position:absolute;inset:0;z-index:50;pointer-events:none;
+  display:flex;align-items:center;justify-content:center;
+  font-size:58px;font-weight:800;letter-spacing:.18em;
+  color:rgba(19,70,138,.10);
+  transform:rotate(-32deg);text-align:center;line-height:1.25;white-space:pre-line}
+body.demo #doc .hoja.portada:after{font-size:64px}
+/* Banda superior en cada hoja, para que se lea aunque la impriman en blanco y negro. */
+body.demo #doc .hoja:before{
+  content:attr(data-cintilla);
+  position:absolute;top:0;left:0;right:0;z-index:51;
+  background:#13468A;color:#fff;font-size:8.5px;font-weight:700;
+  letter-spacing:.12em;text-transform:uppercase;text-align:center;padding:3px 0}
+
+.dato-fijo{margin-top:6px;padding:10px 12px;background:#F1F5F9;border-radius:var(--r);
+  font-size:14px;color:var(--navy);font-weight:600;line-height:1.4}
+
+.congelado{max-width:520px;margin:12vh auto;padding:28px 24px;text-align:center}
+.congelado h2{font-size:22px;color:var(--navy);margin-bottom:14px}
+.congelado p{font-size:14px;line-height:1.65;color:var(--slate);margin-bottom:14px;text-align:left}
+.congelado .btn{width:100%;margin-top:10px}
+body.congelada header.top,body.congelada #tabs{display:none}
+
+.hecho-por{display:flex;gap:13px;align-items:center}
+.hecho-por img{width:46px;height:auto;flex:none}
+.hecho-por b{display:block;font-size:13.5px;color:var(--navy)}
+.hecho-por span{display:block;font-size:11.5px;color:var(--slate);line-height:1.45;margin:2px 0 5px}
+.hecho-por a{font-size:12px;color:var(--azul);text-decoration:none;font-weight:600}
+
+#doc .firma-dev{display:flex;align-items:center;justify-content:center;gap:6px;
+  margin-top:16px;padding-top:11px;border-top:1px solid #E6EDF7;
+  font-size:7.5px;color:#9AA8BA;line-height:1.3;text-align:left}
+/* La tarjeta de monitoreo fija el ancho de sus imágenes en 1.5in; esta firma va
+   dentro de esa tarjeta, así que necesita un selector más específico o el logo
+   sale del tamaño de la pantalla del teléfono dibujada arriba. */
+#doc .monitoreo .tarjeta .firma-dev img{width:15px;height:auto;margin:0;opacity:.5;flex:none}
+#doc .firma-dev b{color:#7C8A9E;font-weight:600}
+
+.tabla-mini{width:100%;border-collapse:collapse;font-size:12.5px}
+.tabla-mini th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--slate);padding:0 0 7px;border-bottom:1px solid var(--line)}
+.tabla-mini th:not(:first-child),.tabla-mini td:not(:first-child){text-align:right}
+.tabla-mini td{padding:8px 0;border-bottom:1px solid var(--line);vertical-align:top}
+.tabla-mini td small{display:block;font-size:10.5px;color:var(--slate);font-weight:400}
+.tabla-mini .suma td{border-bottom:none;padding:3px 0;color:var(--slate)}
+.tabla-mini .tot td{font-weight:700;color:var(--navy);font-size:14px;padding-top:7px}
+
+/* ---------- orden de compra impresa ---------- */
+#doc .hoja.orden .oc-partes{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:16px 0 14px}
+#doc .hoja.orden .oc-partes .et{font-size:9px;font-weight:700;letter-spacing:.14em;
+  text-transform:uppercase;color:#7C8A9E;margin-bottom:5px}
+#doc .hoja.orden .oc-partes b{display:block;font-size:12.5px;color:#0A2A5E}
+#doc .hoja.orden .oc-partes span{display:block;font-size:10px;color:#5E6B7C;line-height:1.5}
+#doc .hoja.orden .oc-obra{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;
+  background:#F1F6FD;border-radius:8px;padding:11px 14px;margin-bottom:16px}
+#doc .hoja.orden .oc-obra span{display:block;font-size:9px;text-transform:uppercase;
+  letter-spacing:.08em;color:#7C8A9E}
+#doc .hoja.orden .oc-obra b{font-size:12px;color:#0A2A5E}
+#doc .hoja.orden .oc-tabla{width:100%;border-collapse:collapse;font-size:10.5px}
+#doc .hoja.orden .oc-tabla th{background:#13468A;color:#fff;text-align:left;padding:7px 9px;
+  font-size:9px;text-transform:uppercase;letter-spacing:.06em}
+#doc .hoja.orden .oc-tabla td{padding:8px 9px;border-bottom:1px solid #E6EDF7;vertical-align:top}
+#doc .hoja.orden .oc-tabla td.n{text-align:right;white-space:nowrap}
+#doc .hoja.orden .oc-tabla td small{display:block;color:#7C8A9E;font-size:9px;margin-top:2px}
+#doc .hoja.orden .oc-tabla tfoot td{border:none;padding:3px 9px;text-align:right;color:#5E6B7C}
+#doc .hoja.orden .oc-tabla tfoot .tot td{font-weight:700;color:#0A2A5E;font-size:12.5px;
+  border-top:1px solid #C9D8EE;padding-top:7px}
+#doc .hoja.orden .oc-notas{font-size:9.5px;color:#6b7280;line-height:1.55;margin-top:12px}
+
+/* ---------- ayuda en contexto ----------
+   El signo va pegado a la etiqueta del campo, no en una esquina: la duda nace
+   leyendo la etiqueta. Se ve discreto para no ensuciar el formulario, pero el
+   área que responde al dedo es de 24 px. */
+.pista{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:16px;height:16px;padding:0;margin-left:5px;vertical-align:-3px;
+  border:1.4px solid var(--sky,#2F6FC4);border-radius:50%;background:transparent;
+  color:var(--sky,#2F6FC4);font:700 10.5px/1 inherit;cursor:pointer;
+  position:relative;
+}
+.pista:before{content:"";position:absolute;inset:-5px}   /* área para el dedo */
+.pista:active{background:var(--sky,#2F6FC4);color:#fff}
+label.f > span .pista{text-transform:none;letter-spacing:0}
+h3 .pista{vertical-align:1px}
+@media print{ .pista{display:none} }
+
+.ayuda-texto{font-size:13.5px;line-height:1.65;color:var(--ink,#1F2937)}
+.ayuda-texto p{margin:0 0 11px}
+.ayuda-texto b{color:var(--navy)}
+.ayuda-pie{margin-top:14px;padding-top:11px;border-top:1px solid var(--line);
+  font-size:12px;color:var(--slate)}
+.ayuda-pie a{color:var(--sky,#2F6FC4);font-weight:600;text-decoration:none}
+
+/* ---------- clientes repetidos ---------- */
+.dupgrupo{border:1px solid var(--line);border-radius:var(--r);padding:12px;margin-bottom:14px;
+  background:#F8FAFC}
+.dupmotivo{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--slate);margin-bottom:9px}
+.dupfila{display:flex;align-items:flex-start;gap:11px;background:#fff;border:1px solid var(--line);
+  border-radius:10px;padding:11px 12px;margin-bottom:7px;cursor:pointer}
+.dupfila:has(input:checked){border-color:var(--blue);box-shadow:0 0 0 1px var(--blue)}
+.dupfila input{margin-top:3px;width:18px;height:18px;flex:none;accent-color:var(--blue)}
+.dupdatos{flex:1;min-width:0}
+.dupdatos b{display:block;font-size:13.5px;font-weight:650;line-height:1.3}
+.dupdatos span{display:block;font-size:11.5px;color:var(--slate);margin-top:2px}
+.dupcuenta{flex:none;text-align:right}
+.dupcuenta b{display:block;font-size:16px;font-weight:700}
+.dupcuenta span{font-size:10px;color:var(--slate)}
+
+/* ---------- almacén: existencias, vales y kardex ---------- */
+.seg{display:grid;grid-template-columns:repeat(3,1fr);background:#E6EDF6;border-radius:12px;padding:3px;margin-bottom:14px}
+.seg button{background:none;border:0;border-radius:9px;padding:8px 4px;font-size:13px;font-weight:700;color:var(--slate);cursor:pointer}
+.seg button.on{background:#fff;color:var(--navy2);box-shadow:0 1px 3px rgba(6,34,71,.12)}
+.ayuda-inv{font-size:12px;color:var(--slate);line-height:1.5;margin:0 0 12px}
+.filtros-linea{display:flex;gap:8px;margin:-4px 0 12px}
+.filtros-linea select{padding:8px 10px;font-size:13px}
+.badge.b-salida{background:#FBE4E2;color:#B4241A}
+.badge.b-entrada{background:#DEF3E7;color:#137A4B}
+.badge.b-devolucion{background:#E3EFFC;color:#1B5BA0}
+.badge.b-ajuste{background:#EEF2F7;color:#5A6B85}
+.vale-item .m b{white-space:normal;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.vale-item.cancelado{opacity:.62}
+.vale-item.cancelado .m b{text-decoration:line-through;text-decoration-thickness:1px}
+.vale-partida{display:grid;grid-template-columns:1fr 84px 38px 26px;gap:8px;align-items:center;
+  padding:9px 0;border-bottom:1px dashed var(--line)}
+.vale-partida .d{min-width:0}
+.vale-partida .d b{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+  font-size:12.5px;font-weight:650;line-height:1.25;white-space:normal}
+.vale-partida .d span{font-size:11px;color:var(--slate)}
+.vale-partida input{padding:8px 8px;font-size:15px;text-align:right;font-weight:700}
+.vale-partida .u{font-size:11px;color:var(--slate);font-weight:700}
+.vale-partida .x{background:none;border:0;color:var(--bad);font-size:20px;cursor:pointer;padding:0}
+.vale-partida.falta .d span{color:var(--bad)}
+.vale-partida.falta input{border-color:var(--bad);color:var(--bad)}
+.firma-caja{position:relative}
+canvas.firma{width:100%;height:auto;display:block;background:#fff;border:1px dashed #9FB3CC;border-radius:10px;
+  touch-action:none;cursor:crosshair}
+.firma-caja .btn{position:absolute;right:8px;bottom:8px;padding:5px 10px;font-size:12px}
+.firma-vista{margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:#F8FAFC}
+.firma-vista span{display:block;font-size:11px;font-weight:700;color:var(--slate);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
+.firma-vista img{max-height:90px;width:auto}
+table.tabla-vale{width:100%;border-collapse:collapse;font-size:13px}
+table.tabla-vale th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--slate);
+  padding:6px 4px;border-bottom:2px solid var(--line)}
+table.tabla-vale td{padding:7px 4px;border-bottom:1px dashed var(--line);vertical-align:top}
+table.tabla-vale td:first-child{white-space:nowrap}
+.spec.vale-spec div b{white-space:normal;word-break:break-word}
+table.tabla-vale td.n,table.tabla-vale th.n{text-align:right;white-space:nowrap}
+table.tabla-vale tr.tot td{font-weight:800;border-bottom:0;border-top:2px solid var(--line)}
+
+/* ---------- documento imprimible ---------- */
+#doc{display:none}
+@media print{
+  body{background:#fff}
+  .app,nav.tabs,.fab,header.top,.modal{display:none !important}
+  #doc{display:block !important}
+  @page{size:letter;margin:11mm}
+
+}
+#doc .hoja{max-width:7in;margin:0 auto;color:#1f2a25;font-size:12px}
+#doc .dh{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #0a3b7d;padding-bottom:10px;margin-bottom:16px}
+#doc .dh img{height:64px}
+#doc h1{font-size:20px;color:#0a3b7d;font-weight:800}
+#doc h2{font-size:14px;color:#0a3b7d;margin:13px 0 6px;font-weight:700}
+#doc table{width:100%;border-collapse:collapse;margin-top:6px}
+#doc th{background:#13468a;color:#fff;font-size:10.5px;padding:7px 8px;text-align:left;text-transform:uppercase;letter-spacing:.04em}
+#doc td{border-bottom:1px solid #dbe4ef;padding:7px 8px;font-size:11.5px}
+#doc td.n,#doc th.n{text-align:right}
+#doc tr.tot td{background:#e9f0fa;font-weight:800;font-size:13px}
+#doc .campos{display:grid;grid-template-columns:1fr 1fr;gap:3px 18px;font-size:11.5px}
+#doc .campos div{display:flex;justify-content:space-between;gap:14px;
+  border-bottom:1px dotted #cfdcee;padding:3px 0}
+#doc .campos div>span{flex:0 0 auto}
+#doc .campos b{text-align:right;min-width:0}
+#doc .campos b{font-weight:700}
+#doc .pie{margin-top:15px;border-top:1px solid #dbe4ef;padding-top:9px;font-size:10px;color:#6b7280;line-height:1.5}
+
+/* Campo destacado: la intermedia del recibo, que es donde actúan los paneles */
+label.f.destaca{background:#E9F1FB;border:1px solid #BBD4EE;border-radius:10px;padding:8px 10px 4px}
+label.f.destaca>span{color:var(--blue);font-weight:800}
+
+/* Foto del recibo — respaldo interno, nunca se imprime en el PDF del cliente */
+.foto-caja{display:flex;gap:12px;align-items:flex-start}
+.foto-caja img{width:96px;height:96px;object-fit:cover;border-radius:10px;border:1px solid #d4dde9}
+.foto-vacia{width:96px;height:96px;border-radius:10px;border:1px dashed #b9c6d6;display:flex;
+  align-items:center;justify-content:center;color:#8fa0b4;font-size:11px;text-align:center;padding:6px}
+
+/* Recibo de CFE dentro del PDF interno (botón "PDF con recibo") */
+#doc .recibo-doc{margin-top:14px;border:1px solid #dbe4ef;border-radius:8px;padding:8px;
+  break-inside:avoid;page-break-inside:avoid}
+#doc .recibo-doc span{display:block;font-size:10px;color:#6b7280;margin-bottom:6px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.4px}
+#doc .recibo-doc img{width:100%;max-height:3.4in;object-fit:contain;display:block}
+
+/* Segunda hoja del PDF: recuperación de la inversión */
+#doc .hoja.recuperacion{page-break-before:always;break-before:page}
+#doc table.rec{width:100%;border-collapse:collapse;font-size:10.5px}
+#doc table.rec th{background:#0a3b7d;color:#fff;padding:6px 7px;text-align:left;font-size:9.5px;
+  text-transform:uppercase;letter-spacing:.3px}
+#doc table.rec td{padding:4px 7px;border-bottom:1px solid #eef2f7}
+#doc table.rec tr.anio td{background:#e9f1fb;font-weight:700}
+#doc table.rec tr:last-child td{border-bottom:2px solid #0a3b7d;font-weight:700}
+
+/* ---------- portada de la propuesta ----------
+   Fija para todas las cotizaciones. Ocupa la hoja completa, de orilla a orilla:
+   eso se logra con una página con nombre y margen cero, declarada al final. */
+#doc .hoja.portada{
+  max-width:none;width:8.5in;height:11in;margin:0;padding:0;position:relative;overflow:hidden;
+  background:#fff;page-break-after:always;break-after:page;color:#1f2a25}
+#doc .portada .arriba{padding:.62in .62in 0}
+#doc .portada img.marca{width:2in;height:auto;margin-bottom:18px}
+#doc .portada h1{font-size:31px;font-weight:800;color:#0a3b7d;line-height:1.12;letter-spacing:-.2px}
+#doc .portada .sub{font-size:22px;font-weight:700;color:#13468a;margin-top:9px}
+#doc .portada img.banda{width:100%;height:2.5in;object-fit:cover;object-position:center 42%;
+  border-radius:14px;margin-top:18px;display:block}
+
+#doc .portada .mv{display:grid;grid-template-columns:1fr 1fr;gap:0 34px;margin-top:20px}
+#doc .portada .mv .et{font-size:10px;font-weight:700;letter-spacing:.22em;text-transform:uppercase;
+  color:#3f8fda;border-bottom:2px solid #3f8fda;display:inline-block;padding-bottom:3px}
+#doc .portada .mv .tit{font-size:13px;font-weight:700;color:#0a3b7d;margin:9px 0 7px}
+#doc .portada .mv p{font-size:9.5px;line-height:1.65;color:#4b5563;text-align:justify}
+
+/* Portada sencilla: la que sale cuando la empresa todavía no sube foto de
+   portada ni captura misión y visión. Sin esto, el título quedaba arriba y la
+   hoja era un hueco blanco de dos tercios. El bloque se centra a lo alto y se
+   agrega una banda de color para que la hoja se vea intencional y no a medias. */
+#doc .portada.sencilla .arriba{
+  position:absolute;top:0;left:0;right:0;bottom:2.6in;
+  display:flex;flex-direction:column;justify-content:center;padding:.62in}
+#doc .portada.sencilla:before{content:"";position:absolute;left:0;right:0;top:0;height:.32in;
+  background:linear-gradient(90deg,#2F6FC4 0%,#13468A 100%)}
+#doc .portada.sencilla h1{font-size:36px}
+#doc .portada.sencilla .sub{font-size:24px}
+
+#doc .portada .caja{position:absolute;left:0;bottom:.72in;z-index:2;width:60%;
+  background:linear-gradient(120deg,#2F6FC4 0%,#13468A 100%);color:#fff;
+  padding:26px 40px 26px .62in;border-radius:0 70px 70px 0;box-shadow:0 8px 24px rgba(10,35,80,.18)}
+#doc .portada .caja div{display:flex;gap:10px;font-size:12.5px;line-height:1.85}
+#doc .portada .caja .gap{height:9px}
+#doc .portada .caja .lab{opacity:.85;min-width:70px}
+#doc .portada .caja .val{font-weight:700}
+#doc .portada .datos{position:absolute;right:.62in;bottom:.9in;z-index:2;text-align:right;
+  font-size:11.5px;color:#0a3b7d;line-height:1.85}
+#doc .portada .datos b{font-weight:700}
+
+/* ---------- hoja de anexo: la foto del equipo ---------- */
+#doc .hoja.anexo{page-break-before:always;break-before:page}
+#doc .foto-anexo{margin-top:14px;border:1px solid #dbe4ef;border-radius:6px;padding:10px;
+  background:#f7fafd;height:6.6in;display:flex;align-items:center;justify-content:center;
+  break-inside:avoid;page-break-inside:avoid}
+#doc .foto-anexo img{max-width:100%;max-height:100%;width:auto;height:auto;
+  object-fit:contain;display:block;border-radius:3px}
+#doc .pie-anexo{margin-top:10px;font-size:11.5px;font-weight:700;color:#0a3b7d;text-align:center}
+
+/* ---------- última hoja: monitoreo y contacto ---------- */
+#doc .hoja.monitoreo{page-break-before:always;break-before:page;position:relative;
+  display:flex;flex-direction:column;min-height:9.2in}
+#doc .monitoreo .mon{display:flex;gap:26px;align-items:center;margin-top:14px}
+#doc .monitoreo .mon svg{flex:none}
+#doc .monitoreo .pastilla{background:linear-gradient(120deg,#2F6FC4,#13468A);color:#fff;
+  border-radius:999px;padding:9px 20px;font-size:12.5px;font-weight:600;margin-bottom:10px}
+#doc .monitoreo .pastilla:last-child{margin-bottom:0}
+#doc .monitoreo .cierre{display:flex;align-items:center;gap:18px;margin-top:auto;padding-top:26px}
+#doc .monitoreo .cierre .tel{flex:none}
+#doc .monitoreo .tarjeta{flex:1;background:#EEF3FB;border-radius:18px;padding:22px 26px}
+#doc .monitoreo .tarjeta img{width:1.5in;height:auto;margin:0 auto}
+#doc .monitoreo .tarjeta .razon{text-align:center;font-size:13px;color:#13468a;font-weight:700;margin:4px 0 12px}
+#doc .monitoreo .ct{display:flex;align-items:center;gap:10px;font-size:12.5px;margin-bottom:8px;color:#1f2a25}
+#doc .monitoreo .ct svg{flex:none}
+#doc .monitoreo .nota{text-align:center;font-size:11px;color:#6b7280;margin-top:10px}
+
+/* ---------- hoja del vale de almacén ----------
+   Documento interno: sí lleva la marca de Marcelestial. Una hoja carta, con
+   espacio para las dos firmas al pie. */
+#doc .hoja.vale{position:relative}
+#doc .vale .dh img{height:58px}
+#doc .vale-folio{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:10px;margin-bottom:12px}
+#doc .vale-folio div{background:#EEF3FB;border-radius:8px;padding:8px 12px}
+#doc .vale-folio span{display:block;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#4a5b75}
+#doc .vale-folio b{display:block;font-size:17px;font-weight:800;color:#0a3b7d;line-height:1.2;margin-top:2px}
+#doc .vale table td{vertical-align:top}
+#doc .vale-leyenda{font-size:10px;color:#4b5563;line-height:1.5;margin-top:16px;padding:9px 11px;
+  border:1px solid #dbe4ef;border-radius:8px;background:#fafbfd}
+#doc .firmas{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:22px;padding:0 10px}
+#doc .firma-bloque{text-align:center}
+#doc .firma-bloque .linea{height:64px;border-bottom:1.5px solid #1f2a25;display:flex;align-items:flex-end;justify-content:center;margin-bottom:6px}
+#doc .firma-bloque .linea img{max-height:62px;width:auto}
+#doc .firma-bloque b{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#0a3b7d}
+#doc .firma-bloque span{display:block;font-size:11.5px;color:#1f2a25;margin-top:2px}
+#doc .sello{position:absolute;top:3.4in;left:50%;transform:translate(-50%,-50%) rotate(-18deg);
+  font-size:54px;font-weight:900;letter-spacing:.2em;color:rgba(180,36,26,.28);border:5px solid rgba(180,36,26,.28);
+  border-radius:10px;padding:4px 22px;pointer-events:none}
+
+/* ---------- vista previa de la cotización en pantalla ----------
+   Se ve la propuesta como quedará en papel, con una barra arriba para
+   imprimirla o guardarla en PDF. Antes se abría el diálogo de impresión de
+   golpe y el vendedor no alcanzaba a revisar nada. */
+body.previa{overflow:hidden}
+#doc.previa{display:block;position:fixed;inset:0;z-index:70;overflow:auto;
+  background:#6B7A90;padding:74px 10px calc(28px + env(safe-area-inset-bottom));
+  -webkit-overflow-scrolling:touch}
+#doc.previa .hoja-caja{margin:0 auto 14px;overflow:hidden}
+#doc.previa .hoja.portada{padding:0}
+#doc.previa .hoja{background:#fff;padding:20px 18px;margin:0;
+  box-shadow:0 10px 30px rgba(0,0,0,.28);border-radius:3px;
+  transform-origin:top left}
+.previa-barra{position:fixed;top:0;left:0;right:0;z-index:71;display:flex;align-items:center;gap:10px;
+  justify-content:space-between;background:#fff;border-bottom:1px solid var(--line);
+  padding:10px 12px;padding-top:calc(10px + env(safe-area-inset-top))}
+.previa-barra[hidden]{display:none !important}
+.previa-barra span{font-size:12px;font-weight:700;color:var(--slate);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---------- ajustes que sólo aplican al imprimir ----------
+   Van al final del archivo para que ganen sobre las reglas de arriba. */
+@media print{
+  /* La portada es la única hoja sin márgenes: se imprime a sangre. */
+  @page portada{ size:letter; margin:0 }
+  #doc .hoja.portada{ page:portada }
+
+  /* En la vista previa el documento está flotando sobre la pantalla; al
+     imprimir tiene que volver a ser un documento normal o no se pagina. */
+  .previa-barra{display:none !important}
+  #doc.previa{position:static;overflow:visible;padding:0;background:none;z-index:auto}
+  #doc.previa .hoja-caja{height:auto !important;width:auto !important;overflow:visible}
+  #doc.previa .hoja{background:none;padding:0;margin:0 auto;box-shadow:none;border-radius:0;
+    width:auto !important;transform:none !important}
+
+  /* La propuesta debe caber en una hoja: al imprimir se aprieta un poco el
+     interlineado para que el pie no se brinque solo a la página siguiente. */
+  #doc .hoja{font-size:10.5px}
+  #doc .dh{padding-bottom:8px;margin-bottom:12px}
+  #doc .dh img{height:56px}
+  #doc h1{font-size:19px}
+  #doc h2{font-size:12.5px;margin:8px 0 3px}
+  #doc th,#doc td{padding:5px 8px}
+  #doc .campos{gap:2px 18px}
+  #doc .campos div{padding:2px 0}
+  #doc .pie{margin-top:10px;padding-top:6px;font-size:8.5px;line-height:1.4}
+  /* La hoja de recuperación puede llevar 40 renglones: se aprieta para que la
+     tabla completa quepa en una sola página. */
+  #doc table.rec{font-size:9px}
+  #doc table.rec th{padding:3px 6px;font-size:8px}
+  #doc table.rec td{padding:0.5px 6px;line-height:1.05}
+  #doc .hoja.recuperacion p{font-size:8.5px;line-height:1.4}
+  /* Las tablas cortas no se parten; la de recuperación SÍ puede partirse, porque
+     lleva 40 renglones y si se le prohíbe brinca entera y deja una hoja vacía. */
+  #doc table:not(.rec),#doc .campos{page-break-inside:avoid}
+  #doc table.rec{page-break-inside:auto}
+  #doc table.rec tr{page-break-inside:avoid}
+}
