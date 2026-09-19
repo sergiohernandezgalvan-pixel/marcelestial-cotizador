@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.09.19c";
+const VERSION = "2026.09.19e";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -2191,6 +2191,18 @@ async function tomarFoto(ev) {
 }
 
 window.formEmpresa = formEmpresa;
+
+/* Borrar la propia cuenta al entregar una instalación. El servidor sólo lo
+   permite si queda otro administrador que ya activó su cuenta. */
+window.salirDeInstalacion = async () => {
+  if (!confirm("Vas a eliminar tu cuenta de esta instalación. Se cierra tu sesión y ya no " +
+               "podrás entrar aquí. ¿Seguro?")) return;
+  try {
+    await api("usuarios?id=" + S.yo.id, { method: "DELETE" });
+    alert("Listo. Tu cuenta salió de esta instalación.");
+    salir();
+  } catch (x) { alert(x.message); }
+};
 
 /* Descarga el respaldo como archivo. Sigue funcionando con la licencia vencida:
    la información capturada es del cliente, no de quien le vendió la aplicación. */

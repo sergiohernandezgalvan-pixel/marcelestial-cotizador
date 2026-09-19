@@ -682,7 +682,18 @@ export default async (req) => {
         const id = num(url.searchParams.get("id"));
         const transferir = num(url.searchParams.get("transferir"));
         if (!id) return err("Falta indicar el usuario.");
-        if (id === yo.id) return err("No puedes eliminar tu propia cuenta.");
+        /* Borrarse a uno mismo sí se permite, con una condición: que quede otro
+           administrador activo. Es el caso de entrega de una instalación: quien
+           la configuró se sale y deja al dueño solo. Sin esta salida, el que
+           armó la instalación tenía que pedirle al cliente que lo borrara. */
+        if (id === yo.id) {
+          const [q] = await db.sql`
+            SELECT COUNT(*)::int AS n FROM usuarios
+             WHERE rol = 'owner' AND activo AND id <> ${yo.id} AND activacion_hash IS NULL`;
+          if ((q?.n || 0) < 1)
+            return err("Para salir de esta instalación tiene que quedar otro administrador que ya " +
+                       "haya entrado con su contraseña. Invítalo y espera a que active su cuenta.");
+        }
 
         const [u] = await db.sql`SELECT id, nombre, rol FROM usuarios WHERE id = ${id}`;
         if (!u) return err("Ese usuario ya no existe.", 404);

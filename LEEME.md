@@ -247,8 +247,10 @@ Así se arma una demostración para un cliente, sin que nadie más conozca su co
    contraseña vacía**. Sale un enlace de invitación: se le manda por WhatsApp.
 5. Él abre el enlace, elige su contraseña y entra. La pantalla de acceso ya trae su logo y
    su nombre, porque el servidor los manda antes de iniciar sesión.
-6. Cuando el cliente ya entró, **borrar la cuenta de instalador**. La app no deja quedarse
-   sin administrador, así que hay que hacerlo en este orden.
+6. Cuando el cliente ya entró, salir: **Más → Mi cuenta → Salir de esta instalación**. El
+   servidor sólo lo permite si queda otro administrador que ya activó su cuenta con su
+   contraseña; si el dueño todavía no abrió su enlace, no deja salir. Así nunca se queda una
+   instalación sin administrador ni con uno que no puede entrar.
 
 El enlace vale **7 días** y sirve **una sola vez**. No se guarda en claro —en la base sólo
 queda su huella—, así que si se pierde no se puede recuperar: se usa **Volver a invitar** en

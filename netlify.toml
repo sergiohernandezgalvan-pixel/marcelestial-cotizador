@@ -35,6 +35,14 @@
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
     Permissions-Policy = "geolocation=(), microphone=(), payment=(), usb=()"
+    # Encontradas por un escáner de seguridad corrido contra la app:
+    # HSTS obliga a HTTPS aunque alguien escriba http://; las Cross-Origin
+    # aíslan la página de otras ventanas y sitios; la última evita que Flash
+    # o Acrobat viejos lean recursos del sitio. Ninguna cambia cómo se ve la app.
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+    Cross-Origin-Opener-Policy = "same-origin"
+    Cross-Origin-Resource-Policy = "same-origin"
+    X-Permitted-Cross-Domain-Policies = "none"
     # Política de contenido. Bloquea que la página cargue código de otro sitio y
     # que mande datos a un servidor ajeno, que es como termina una inyección de
     # código en robo de información. Las imágenes llevan data: y blob: porque
