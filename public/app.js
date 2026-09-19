@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.09.12";
+const VERSION = "2026.09.19c";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -94,19 +94,75 @@ function aviso(el, texto, tipo = "err") {
   n.textContent = texto || "";
 }
 
+/* Licencia vencida: la aplicación queda congelada. No se esconde nada ni se
+   borra nada; simplemente deja de operar y lo único que sigue vivo es la
+   descarga del respaldo, porque esa información es del cliente. */
+function pantallaCongelada(lic) {
+  S.licencia = lic;
+  document.body.classList.add("demo", "congelada");
+  const gate = $("#gate");
+  if (gate) gate.hidden = true;
+  const app = $("#app");
+  app.classList.add("on");
+  const suspendida = lic.motivo === "suspendida";
+  app.innerHTML = `
+    <div class="congelado">
+      <h2>${suspendida ? "Acceso suspendido"
+                       : lic.demo ? "La demostración terminó" : "Tu licencia venció"}</h2>
+      <p>${suspendida
+            ? "El acceso a la aplicación está suspendido."
+            : `La licencia venció el <b>${esc(fechaLarga(lic.vence))}</b>, así que la aplicación
+               dejó de operar.`}
+         <b>Tu información no se borró:</b> sigue guardada tal como la dejaste y vuelve completa
+         el día que se reactive.</p>
+      ${lic.contacto ? `<p>Para reactivarla, escríbenos al <b>${esc(lic.contacto)}</b>.</p>` : ""}
+      <p>Mientras tanto puedes descargarla completa —clientes, cotizaciones, catálogo,
+         almacén y vales— en un archivo que es tuyo.</p>
+      <button class="btn pri" onclick="descargarRespaldo(this)">Descargar mi respaldo</button>
+      <button class="btn sec" onclick="salir()">Cerrar sesión</button>
+    </div>`;
+}
+
 /* ---------------- acceso ---------------- */
+/* ¿Vienen de un enlace de invitación? El código viaja en la dirección:
+   .../?activar=CODIGO  — se atiende antes que cualquier otra cosa. */
+async function tramitarInvitacion() {
+  const codigo = new URLSearchParams(location.search).get("activar");
+  if (!codigo) return false;
+  api("estado").then((e) => { prenderMarca(e.marca); prenderDemo(e.demo, e.licencia); }).catch(() => {});
+  $("#formLogin").hidden = true;
+  $("#formSetup").hidden = true;
+  $("#gateTitulo").textContent = "Estrena tu cuenta";
+  try {
+    const quien = await api("activacion?codigo=" + encodeURIComponent(codigo));
+    $("#gateSub").textContent = "Elige la contraseña con la que vas a entrar";
+    $("#activarQuien").textContent = `${quien.nombre} · ${quien.correo}`;
+    $("#formActivar").hidden = false;
+    S.codigoInvitacion = codigo;
+  } catch (x) {
+    $("#gateSub").textContent = "";
+    aviso("#gateError", x.message);
+    $("#formLogin").hidden = false;
+    $("#gateTitulo").textContent = "Cotizador";
+  }
+  return true;
+}
+
 async function arrancar() {
+  if (await tramitarInvitacion()) return;
   if (S.token) {
     try {
-      const { usuario } = await api("yo");
+      const { usuario, licencia } = await api("yo");
       S.yo = usuario;
-      api("estado").then((e) => prenderDemo(e.demo)).catch(() => {});
+      api("estado").then((e) => { prenderMarca(e.marca); prenderDemo(e.demo, e.licencia); }).catch(() => {});
+      if (licencia && licencia.vencida) return pantallaCongelada(licencia);
       return entrar();
     } catch { localStorage.removeItem("mc_token"); S.token = null; }
   }
   try {
-    const { instalado, demo } = await api("estado");
-    prenderDemo(demo);
+    const { instalado, demo, licencia, marca } = await api("estado");
+    prenderMarca(marca);
+    prenderDemo(demo, licencia);
     if (!instalado) {
       $("#formLogin").hidden = true;
       $("#formSetup").hidden = false;
@@ -124,6 +180,30 @@ $("#formLogin").addEventListener("submit", async (e) => {
     const { token, usuario } = await api("login", { method: "POST", body: d });
     S.token = token; S.yo = usuario;
     localStorage.setItem("mc_token", token);
+    const est = await api("estado").catch(() => ({}));
+    prenderMarca(est.marca);
+    prenderDemo(est.demo, est.licencia);
+    if (est.licencia && est.licencia.vencida) return pantallaCongelada(est.licencia);
+    entrar();
+  } catch (x) { aviso("#gateError", x.message); }
+});
+
+$("#formActivar").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  aviso("#gateError", "");
+  const d = Object.fromEntries(new FormData(e.target));
+  if (d.password !== d.password2) return aviso("#gateError", "Las dos contraseñas no son iguales.");
+  try {
+    const { token, usuario } = await api("activar", {
+      method: "POST", body: { codigo: S.codigoInvitacion, password: d.password },
+    });
+    S.token = token; S.yo = usuario;
+    localStorage.setItem("mc_token", token);
+    /* Se limpia la dirección para que el enlace no quede en el historial. */
+    history.replaceState(null, "", location.pathname);
+    const est = await api("estado").catch(() => ({}));
+    prenderMarca(est.marca);
+    prenderDemo(est.demo, est.licencia);
     entrar();
   } catch (x) { aviso("#gateError", x.message); }
 });
@@ -192,12 +272,76 @@ function ir(v) {
 
 /* El sitio de demostración se marca solo: el servidor avisa si Netlify tiene
    MODO_DEMO = 1. No se puede encender desde la app. */
-function prenderDemo(esDemo) {
+/* "2026-08-01" → "1 de agosto de 2026". Una fecha así se lee de un vistazo;
+   la otra hay que descifrarla. */
+const fechaLarga = (iso) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(iso || ""))) return String(iso || "");
+  const MES = ["enero","febrero","marzo","abril","mayo","junio",
+               "julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const [a, m, d] = iso.split("-").map(Number);
+  return `${d} de ${MES[m - 1]} de ${a}`;
+};
+
+/* Pinta el logo y el nombre de la empresa en la pantalla de acceso y en la
+   barra de arriba, con lo que el servidor manda antes de iniciar sesión. */
+function prenderMarca(marca) {
+  if (!marca) return;
+  const nombre = String(marca.razon_social || "").trim();
+  const logo = String(marca.logo || "").trim();
+  if (nombre) {
+    document.title = "Cotizador · " + nombre;
+    const t = $("#gateTitulo");
+    if (t && t.textContent.includes("Marcelestial")) t.textContent = nombre;
+  }
+  if (logo) {
+    /* Ojo con el selector: la firma del desarrollador vive dentro de #gate y
+       NO debe cambiar de logo. Con «#gate img» a secas, la instalación de un
+       cliente terminaba firmando con su propio logo la línea que dice
+       «Una aplicación de Comercializadora Marcelestial». */
+    for (const img of document.querySelectorAll("#gate .gate-card img, header.top img"))
+      img.src = logo;
+  }
+}
+
+function prenderDemo(esDemo, lic) {
   S.demo = !!esDemo;
+  S.licencia = lic || null;
   document.body.classList.toggle("demo", S.demo);
   const cinta = $("#cintaDemo");
-  if (cinta) cinta.hidden = !S.demo;
+
+  /* Instalación de trabajo dentro de los días de gracia: no lleva los sellos de
+     demostración, pero sí un aviso, porque a alguien se le pasó renovar y en
+     unos días se apaga. Sin esto, el corte llegaría sin advertencia. */
+  if (!S.demo && lic && lic.enGracia && cinta) {
+    document.body.classList.add("demo");
+    cinta.hidden = false;
+    cinta.textContent = "TU LICENCIA VENCIÓ EL " + fechaLarga(lic.vence).toUpperCase() +
+      " · SE SUSPENDE EN " + lic.diasDeGracia + (lic.diasDeGracia === 1 ? " DÍA" : " DÍAS") +
+      (lic.contacto ? " · ESCRÍBENOS AL " + lic.contacto : "");
+    return;
+  }
+
+  if (cinta) {
+    cinta.hidden = !S.demo;
+    const l = S.licencia;
+    cinta.textContent = !l || !l.vence
+      ? "MODO DEMOSTRACIÓN · los datos son ficticios"
+      : l.vencida
+        ? "LA DEMOSTRACIÓN VENCIÓ EL " + fechaLarga(l.vence).toUpperCase()
+        : "VERSIÓN DE PRUEBA · vence el " + fechaLarga(l.vence) +
+          (l.dias >= 0 ? " · faltan " + l.dias + (l.dias === 1 ? " día" : " días") : "");
+  }
 }
+
+/* Atributos del sello que lleva cada hoja impresa cuando es demostración.
+   Se leen desde el CSS, así que no dependen de que cada hoja se acuerde. */
+const selloDemo = () => {
+  if (!S.demo) return "";
+  const l = S.licencia;
+  return ` data-sello="DEMOSTRACIÓN\nSIN VALIDEZ COMERCIAL"` +
+         ` data-cintilla="Documento de demostración · sin validez comercial${
+           l && l.vence ? " · licencia vigente hasta el " + fechaLarga(l.vence) : ""}"`;
+};
 
 /* ---------------- datos base ---------------- */
 async function cargarCatalogo() {
@@ -209,6 +353,87 @@ async function cargarClientes() {
 async function cargarConfig() {
   try { S.config = (await api("config")).config || {}; } catch { S.config = {}; }
 }
+/* Datos de la empresa que firma las propuestas. Viven en config, se editan
+   desde Más → Datos de la empresa. Si la instalación todavía no los tiene
+   capturados, se cae a los de Marcelestial para no dejar la hoja en blanco. */
+const EMPRESA_OMISION = {
+  razon_social: "Comercializadora Marcelestial S.A.S.",
+  giro: "Perfiles de aluminio · Sistemas fotovoltaicos · Soluciones eléctricas",
+  whatsapp: "55 7657 4769",
+  correo: "contacto@marcelestial.net",
+  web: "www.marcelestial.net",
+  cobertura: "CDMX y Estado de México",
+  titulo_propuesta: "SISTEMA DE AUTOGENERACIÓN DE ENERGÍA FOTOVOLTAICA SOLAR",
+  logo: "",
+  mision_titulo: "Energía bien administrada",
+  mision_texto: "Ser una solución integral, en México y el mundo, para la administración eficiente de la energía: integramos tecnología fotovoltaica, eólica y sistemas avanzados de almacenamiento para generar ahorros sostenibles, optimizar el uso de los recursos energéticos de nuestros clientes y contribuir activamente al cuidado del medio ambiente, impulsando el desarrollo de una sociedad más próspera, responsable y sustentable.",
+  vision_titulo: "Transformar el consumo de energía",
+  vision_texto: "Transformar la manera en que las personas, empresas e industrias consumen energía, con estrategias innovadoras que permitan un rápido retorno de inversión y la creación de activos energéticos perdurables. A través de modelos de ahorro compartido y soluciones tecnológicas de última generación, brindamos beneficios económicos inmediatos con una inversión accesible, generando valor sostenible para nuestros clientes.",
+  portada: "",
+};
+/* Ojo con la regla: los valores por omisión SÓLO aplican cuando la instalación
+   todavía no tiene capturada la llave 'empresa'. En cuanto una empresa guarda
+   sus datos, un campo que dejó vacío sale vacío. Rellenarlo campo por campo
+   haría que a un cliente ajeno se le colara el correo o el logo de Marcelestial
+   en sus propias cotizaciones. */
+const empresa = () => {
+  const e = S.config.empresa;
+  if (!e || !String(e.razon_social || "").trim()) return { ...EMPRESA_OMISION };
+  const v = {};
+  for (const k of Object.keys(EMPRESA_OMISION)) v[k] = String(e[k] ?? "").trim();
+  return v;
+};
+/* El logo es el que suba la empresa. Si no subió ninguno, la hoja va sin logo:
+   nunca se presta el de otra. El archivo del proyecto sólo se usa mientras la
+   instalación siga sin datos capturados. */
+const hayEmpresaPropia = () => !!(S.config.empresa && String(S.config.empresa.razon_social || "").trim());
+const logoEmpresa = () => empresa().logo || (hayEmpresaPropia() ? "" : "/icons/logo.png");
+/* Foto de la banda de la portada. Misma regla que el logo: la de Marcelestial
+   sólo se usa mientras la instalación no tenga datos propios. */
+const portadaEmpresa = () => empresa().portada || (hayEmpresaPropia() ? "" : "/img/portada.jpg");
+/* Etiqueta de imagen del logo, o nada si no hay. */
+const imgLogo = (clase = "", estilo = "") => {
+  const src = logoEmpresa();
+  return src ? `<img ${clase ? `class="${clase}" ` : ""}src="${src}" alt=""${estilo ? ` style="${estilo}"` : ""}>` : "";
+};
+/* Renglón de contacto: junta sólo lo que esté capturado, sin separadores sueltos. */
+const contactoEmpresa = (conEtiqueta = true) => {
+  const e = empresa();
+  return [e.whatsapp && (conEtiqueta ? "WhatsApp " : "") + e.whatsapp, e.correo, e.web, e.cobertura]
+    .filter(Boolean).map(esc).join(" · ");
+};
+/* Firma discreta del desarrollador al pie de la última hoja. Se apaga por
+   instalación con CREDITO_PDF = 0 en Netlify. */
+const firmaDesarrollo = () => (S.licencia && S.licencia.creditoPdf === false)
+  ? ""
+  : `<div class="firma-dev">
+       <img src="/icons/logo.png" alt="">
+       <span>Propuesta generada con el cotizador de <b>Comercializadora Marcelestial S.A.S.</b></span>
+     </div>`;
+
+const pieEmpresa = () => {
+  const e = empresa();
+  return `<b>${esc(e.razon_social)}</b>${e.giro ? " · " + esc(e.giro) : ""}<br>${contactoEmpresa()}`;
+};
+
+/* Misión y visión. Si la empresa no las capturó, la portada sale sin ese
+   bloque en lugar de firmar el discurso de otra empresa. Si sólo capturó una
+   de las dos, se imprime esa sola a todo el ancho. */
+function bloqueMisionVision() {
+  const e = empresa();
+  const col = (etq, tit, txt) => (tit || txt)
+    ? `<div>
+         <div class="et">${etq}</div>
+         ${tit ? `<div class="tit">${esc(tit)}</div>` : ""}
+         ${txt ? `<p>${esc(txt)}</p>` : ""}
+       </div>` : "";
+  const m = col("Misión", e.mision_titulo, e.mision_texto);
+  const v = col("Visión", e.vision_titulo, e.vision_texto);
+  if (!m && !v) return "";
+  const solaUna = !m || !v;
+  return `<div class="mv"${solaUna ? ` style="grid-template-columns:1fr"` : ""}>${m}${v}</div>`;
+}
+
 const paramFV = () => S.config.rapido_fotovoltaico || {};
 const paramDim = () => S.config.dimensionamiento || {};
 
@@ -426,7 +651,16 @@ function editor() {
       <h3>Cliente y estatus</h3>
       ${campoCliente("edCliente", e.cliente_id || "")}
       <button class="btn sec sm" onclick="formCliente()">+ Nuevo cliente</button>
-      <label class="f" style="margin-top:12px"><span>Estatus</span><select id="edEstatus">${opcEst}</select></label>
+      <label class="f" style="margin-top:12px"><span>Estatus ${pista("ganada")}</span><select id="edEstatus">${opcEst}</select></label>
+    </div>
+
+    <div class="card" id="edMaterial" hidden>
+      <h3>Material de montaje</h3>
+      <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
+        Al ganar el proyecto puedes pedir el riel y los clamps a
+        <b>Comercializadora Mar Celestial</b>. La app calcula las piezas a partir de los
+        módulos de esta cotización.</p>
+      <div id="edMaterialResumen"></div>
     </div>
 
     <div class="card">
@@ -574,6 +808,11 @@ function editor() {
   window.scrollTo(0, 0);
   activarBuscadorCliente("edCliente");
   pintarPartidas();
+  pintarMaterial();
+  $("#edEstatus")?.addEventListener("change", () => {
+    S.editor.estatus = $("#edEstatus").value;
+    pintarMaterial();
+  });
   S.edFotoProd = (e._full && e._full.foto_producto) || null;
   $("#edProd")?.addEventListener("change", tomarFotoEditor);
   pintarFotoEditor();
@@ -629,6 +868,184 @@ function calcAhorro() {
     r.innerHTML = `Ahorro por periodo: <b style="color:var(--ok)">${money(a - n)}</b> · <b>${pct}%</b> menos que hoy.`;
   } else r.textContent = "";
 }
+
+/* ---------------- material de montaje y orden de compra ----------------
+   La tarjeta sólo aparece cuando la cotización está ganada y ya se guardó:
+   antes de eso no hay proyecto que surtir. */
+async function pintarMaterial() {
+  const caja = $("#edMaterial");
+  if (!caja) return;
+  const e = S.editor;
+  const modulos = Number(e.tecnico?.paneles) || 0;
+  const listo = e.id && e.estatus === "ganada";
+  caja.hidden = !listo;
+  if (!listo) return;
+
+  const cuerpo = $("#edMaterialResumen");
+  if (!modulos) {
+    cuerpo.innerHTML = `<p style="font-size:13px;color:var(--slate)">
+      Esta cotización no tiene capturado el número de módulos, así que no se puede
+      calcular el material. Escríbelo en <b>Detalle técnico → Número de paneles</b>
+      y guarda.</p>`;
+    return;
+  }
+
+  /* ¿ya se pidió? */
+  let orden = null;
+  try {
+    const { ordenes } = await api("ordenes");
+    orden = (ordenes || []).find((o) => o.cotizacion_id === e.id && !o.cancelado_en) || null;
+  } catch { /* si falla, se ofrece generarla */ }
+
+  if (orden) {
+    cuerpo.innerHTML = `
+      <div class="dato-fijo" style="margin-bottom:12px">
+        Orden <b>${esc(orden.folio)}</b> · ${orden.modulos} módulos · ${money(orden.total)} con IVA
+        ${orden.enviada_en ? '<br><span style="color:var(--exito,#1F7A4D);font-weight:600">Ya enviada al proveedor</span>' : ""}
+      </div>
+      <div class="acciones">
+        <button class="btn pri sm" onclick="verOrden(${orden.id})">Ver la orden</button>
+        <button class="btn sec sm" onclick="cancelarOrden(${orden.id})">Cancelar orden</button>
+      </div>`;
+    return;
+  }
+
+  /* Las hileras importan: los puntos de sujeción interiores se comparten entre
+     paneles vecinos, así que el material NO es proporcional a los módulos. */
+  const hileras = Math.max(1, Math.min(modulos, Number(S.edHileras) || 1));
+  try {
+    const { partidas, catalogo } = await api(`material?modulos=${modulos}&hileras=${hileras}`);
+    const sub = partidas.reduce((a, p) => a + p.importe, 0);
+    const iva = sub * (Number(catalogo.iva) || 0);
+    cuerpo.innerHTML = `
+      <label class="f"><span>¿En cuántas hileras van los ${modulos} paneles? ${pista("hileras")}</span>
+        <input type="number" min="1" max="${modulos}" id="edHileras" value="${hileras}"
+               onchange="cambiarHileras(this.value)">
+        <small style="color:var(--slate)">Los clamps de en medio sujetan dos paneles a la vez,
+        así que a más hileras, más piezas. Cuéntalas en el techo.</small></label>
+      <table class="tabla-mini">
+        <tr><th>Material</th><th>Cant.</th><th>P. unit.</th><th>Importe</th></tr>
+        ${partidas.map((p) => `<tr>
+          <td>${esc(p.nombre)}<small>2 por panel + 2 por hilera</small></td>
+          <td>${p.cantidad}</td><td>${money(p.precio)}</td><td>${money(p.importe)}</td>
+        </tr>`).join("")}
+        <tr class="suma"><td colspan="3">Subtotal</td><td>${money(sub)}</td></tr>
+        <tr class="suma"><td colspan="3">IVA</td><td>${money(iva)}</td></tr>
+        <tr class="suma tot"><td colspan="3">Total</td><td>${money(sub + iva)}</td></tr>
+      </table>
+      <button class="btn pri" style="margin-top:14px" onclick="generarOrden()">
+        Generar orden de compra</button>`;
+  } catch (x) {
+    cuerpo.innerHTML = `<p style="font-size:13px;color:var(--slate)">${esc(x.message)}</p>`;
+  }
+}
+
+/* Hoja imprimible de la orden de compra. Va dirigida al proveedor, así que
+   arriba manda SU marca, no la de la empresa que la emite. */
+window.verOrden = async (id) => {
+  try {
+    const { orden, catalogo } = await api("orden/" + id);
+    const pv = catalogo.proveedor || {};
+    const cancelada = !!orden.cancelado_en;
+    $("#doc").innerHTML = `
+      <div class="hoja orden ${cancelada ? "cancelado" : ""}"${selloDemo()}>
+        <div class="dh">
+          <div>
+            <h1>Orden de compra</h1>
+            <div style="font-size:11.5px;color:#6b7280;margin-top:4px">
+              Folio <b>${esc(orden.folio)}</b> · ${fecha(orden.creado_en)}</div>
+          </div>
+          ${imgLogo()}
+        </div>
+
+        <div class="oc-partes">
+          <div>
+            <div class="et">Proveedor</div>
+            <b>${esc(pv.razon_social || "")}</b>
+            <span>${esc(pv.giro || "")}</span>
+            <span>${[pv.whatsapp && "WhatsApp " + pv.whatsapp, pv.correo, pv.web].filter(Boolean).map(esc).join(" · ")}</span>
+          </div>
+          <div>
+            <div class="et">Solicita</div>
+            <b>${esc(empresa().razon_social)}</b>
+            <span>${contactoEmpresa()}</span>
+            <span>Atiende: ${esc(orden.usuario || "")}</span>
+          </div>
+        </div>
+
+        <div class="oc-obra">
+          <div><span>Obra</span><b>${esc(orden.obra || orden.cliente || "—")}</b></div>
+          <div><span>Módulos del proyecto</span><b>${orden.modulos}</b></div>
+          <div><span>Cotización</span><b>${esc(orden.cotizacion_folio || "—")}</b></div>
+        </div>
+
+        <table class="oc-tabla">
+          <thead><tr>
+            <th>Clave</th><th>Material</th><th>Cant.</th><th>Unidad</th>
+            <th>P. unitario</th><th>Importe</th>
+          </tr></thead>
+          <tbody>
+            ${(orden.partidas || []).map((p) => `<tr>
+              <td>${esc(p.clave)}</td>
+              <td><b>${esc(p.nombre)}</b>${p.detalle ? `<small>${esc(p.detalle)}</small>` : ""}</td>
+              <td class="n">${p.cantidad}</td>
+              <td class="n">${esc(p.unidad)}</td>
+              <td class="n">${money(p.precio)}</td>
+              <td class="n">${money(p.importe)}</td>
+            </tr>`).join("")}
+          </tbody>
+          <tfoot>
+            <tr><td colspan="5">Subtotal</td><td class="n">${money(orden.subtotal)}</td></tr>
+            <tr><td colspan="5">IVA</td><td class="n">${money(orden.iva)}</td></tr>
+            <tr class="tot"><td colspan="5">Total</td><td class="n">${money(orden.total)}</td></tr>
+          </tfoot>
+        </table>
+
+        ${orden.notas ? `<p class="oc-notas"><b>Notas:</b> ${esc(orden.notas)}</p>` : ""}
+        ${cancelada ? `<p class="oc-notas"><b>Cancelada:</b> ${esc(orden.cancelado_motivo || "")}</p>` : ""}
+
+        <p class="oc-notas">Precios sujetos a los escalones de volumen vigentes del proveedor.
+        Cantidades calculadas para ${orden.modulos} paneles en ${orden.hileras}
+        ${orden.hileras === 1 ? "hilera" : "hileras"}, a razón de 2 piezas por panel más 2 por hilera:
+        los puntos de sujeción interiores los comparten dos paneles vecinos.
+        Confirmar contra el levantamiento en sitio antes de surtir.</p>
+
+        <div class="pie">${pieEmpresa()}</div>
+      </div>`;
+    abrirPrevia(orden.folio);
+    /* Se marca como enviada en cuanto se abre para imprimir o compartir: es el
+       momento en que sale del teléfono hacia el proveedor. */
+    if (!orden.enviada_en && !cancelada) {
+      try { await api("orden/" + id + "/enviada", { method: "POST" }); } catch {}
+    }
+  } catch (x) { alert(x.message); }
+};
+
+window.cambiarHileras = (v) => { S.edHileras = Number(v) || 1; pintarMaterial(); };
+
+window.generarOrden = async () => {
+  const e = S.editor;
+  if (!e.id) return alert("Guarda la cotización antes de pedir el material.");
+  const obra = prompt("¿Para qué obra es el material? (aparece en la orden)",
+                      S.clientes.find((c) => String(c.id) === String(e.cliente_id))?.nombre || "");
+  if (obra === null) return;
+  try {
+    const { orden } = await api("ordenes", { method: "POST",
+      body: { cotizacion_id: e.id, obra, modulos: Number(e.tecnico?.paneles) || 0,
+              hileras: Math.max(1, Number(S.edHileras) || 1) } });
+    await pintarMaterial();
+    verOrden(orden.id);
+  } catch (x) { alert(x.message); }
+};
+
+window.cancelarOrden = async (id) => {
+  const motivo = prompt("¿Por qué se cancela la orden?");
+  if (!motivo) return;
+  try {
+    await api("orden/" + id + "/cancelar", { method: "POST", body: { motivo } });
+    await pintarMaterial();
+  } catch (x) { alert(x.message); }
+};
 
 function pintarPartidas() {
   const cont = $("#edPartidas");
@@ -746,14 +1163,14 @@ async function imprimirCotizacion(conRecibo = false) {
 
   $("#doc").innerHTML = `
     ${hojaPortada(c)}
-    <div class="hoja">
+    <div class="hoja"${selloDemo()}>
       <div class="dh">
         <div>
           <h1>Propuesta técnica-económica</h1>
           <div style="font-size:11.5px;color:#6b7280;margin-top:4px">
             Sistema de autogeneración de energía fotovoltaica solar</div>
         </div>
-        <img src="/icons/logo.png" alt="">
+        ${imgLogo()}
       </div>
 
       <div class="campos">
@@ -828,8 +1245,7 @@ async function imprimirCotizacion(conRecibo = false) {
       ${c.comentarios ? `<h2>Comentarios</h2><p style="font-size:11.5px;line-height:1.6">${esc(c.comentarios)}</p>` : ""}
 
       <div class="pie">
-        <b>Comercializadora Marcelestial S.A.S.</b> · Perfiles de aluminio · Sistemas fotovoltaicos · Soluciones eléctricas<br>
-        WhatsApp 55 7657 4769 · contacto@marcelestial.net · www.marcelestial.net · CDMX y Estado de México<br><br>
+        ${pieEmpresa()}<br><br>
         Los precios son indicativos y están sujetos a revisión técnica en sitio y a confirmación por escrito.
         Vigencia de la oferta: 30 días. Cifras de ahorro estimadas con base en el consumo histórico reportado
         y en las tarifas vigentes de CFE.
@@ -912,34 +1328,18 @@ function hojaPortada(c) {
   const renglon = (etq, val) => val
     ? `<div><span class="lab">${etq}</span><span class="val">${esc(val)}</span></div>` : "";
 
+  /* Sin foto de portada y sin misión ni visión, la hoja usa el acomodo
+     sencillo: el título centrado en lugar de dos tercios en blanco. */
+  const sencilla = !portadaEmpresa() && !bloqueMisionVision();
   return `
-    <div class="hoja portada">
+    <div class="hoja portada${sencilla ? " sencilla" : ""}"${selloDemo()}>
       <div class="arriba">
-        <img class="marca" src="/icons/logo.png" alt="Marcelestial">
-        <h1>SISTEMA DE AUTOGENERACIÓN<br>DE ENERGÍA FOTOVOLTAICA SOLAR</h1>
+        ${imgLogo("marca")}
+        <h1>${esc(empresa().titulo_propuesta || EMPRESA_OMISION.titulo_propuesta)}</h1>
         <div class="sub">Propuesta técnica-económica</div>
-        <img class="banda" src="/img/portada.jpg" alt="Sistema fotovoltaico instalado en cubierta">
+        ${portadaEmpresa() ? `<img class="banda" src="${portadaEmpresa()}" alt="Sistema fotovoltaico instalado en cubierta">` : ""}
 
-        <div class="mv">
-          <div>
-            <div class="et">Misión</div>
-            <div class="tit">Energía bien administrada</div>
-            <p>Ser una solución integral, en México y el mundo, para la administración eficiente de
-            la energía: integramos tecnología fotovoltaica, eólica y sistemas avanzados de
-            almacenamiento para generar ahorros sostenibles, optimizar el uso de los recursos
-            energéticos de nuestros clientes y contribuir activamente al cuidado del medio ambiente,
-            impulsando el desarrollo de una sociedad más próspera, responsable y sustentable.</p>
-          </div>
-          <div>
-            <div class="et">Visión</div>
-            <div class="tit">Transformar el consumo de energía</div>
-            <p>Transformar la manera en que las personas, empresas e industrias consumen energía,
-            con estrategias innovadoras que permitan un rápido retorno de inversión y la creación de
-            activos energéticos perdurables. A través de modelos de ahorro compartido y soluciones
-            tecnológicas de última generación, brindamos beneficios económicos inmediatos con una
-            inversión accesible, generando valor sostenible para nuestros clientes.</p>
-          </div>
-        </div>
+        ${bloqueMisionVision()}
       </div>
 
       <div class="caja">
@@ -951,10 +1351,10 @@ function hojaPortada(c) {
       </div>
 
       <div class="datos">
-        <div><b>Comercializadora Marcelestial S.A.S.</b></div>
-        <div><b>WhatsApp:</b> 55 7657 4769</div>
-        <div><b>Correo:</b> contacto@marcelestial.net</div>
-        <div><b>Web:</b> www.marcelestial.net</div>
+        <div><b>${esc(empresa().razon_social)}</b></div>
+        ${empresa().whatsapp ? `<div><b>WhatsApp:</b> ${esc(empresa().whatsapp)}</div>` : ""}
+        ${empresa().correo ? `<div><b>Correo:</b> ${esc(empresa().correo)}</div>` : ""}
+        ${empresa().web ? `<div><b>Web:</b> ${esc(empresa().web)}</div>` : ""}
       </div>
     </div>`;
 }
@@ -969,12 +1369,12 @@ function hojaSitio(c) {
   if (!c.foto_sitio || !c.sitio) return "";
   const t = c.tecnico || {};
   return `
-    <div class="hoja sitio">
+    <div class="hoja sitio"${selloDemo()}>
       <div class="dh">
         <div><h1>Así se vería en tu techo</h1>
           <div style="font-size:11.5px;color:#6b7280;margin-top:4px">
             Folio ${esc(c.folio || "")} · ${esc(c.cliente_nombre || "")}</div></div>
-        <img src="/icons/logo.png" alt="">
+        ${imgLogo()}
       </div>
       <div id="sitioHoja"><img class="foto-sitio" src="${c.foto_sitio}" alt="Vista previa en el techo"></div>
       <p style="font-size:10.5px;color:#6b7280;margin-top:10px;line-height:1.5">
@@ -988,8 +1388,7 @@ function hojaSitio(c) {
           ? ` Imagen de satélite <b>© Google</b>; puede no reflejar cambios recientes en el inmueble.`
           : ""}</p>
       <div class="pie">
-        <b>Comercializadora Marcelestial S.A.S.</b> · Perfiles de aluminio · Sistemas fotovoltaicos · Soluciones eléctricas<br>
-        WhatsApp 55 7657 4769 · contacto@marcelestial.net · www.marcelestial.net · CDMX y Estado de México
+        ${pieEmpresa()}
       </div>
     </div>`;
 }
@@ -999,7 +1398,7 @@ async function pintarHojaSitio(c) {
   const caja = document.getElementById("sitioHoja");
   if (!caja || !c.foto_sitio || !c.sitio) return;
   try {
-    const r = await MCSitio.generarVistaSitio(c.foto_sitio, c.sitio, c.tecnico || {}, "/icons/logo.png");
+    const r = await MCSitio.generarVistaSitio(c.foto_sitio, c.sitio, c.tecnico || {}, logoEmpresa());
     caja.innerHTML = `<img class="foto-sitio" src="${r.url}" alt="Vista previa en el techo">`;
   } catch { /* si algo falla, se queda la foto tal cual */ }
 }
@@ -1014,12 +1413,12 @@ function hojaProducto(c) {
   ].filter(Boolean).join(" · ");
 
   return `
-    <div class="hoja anexo">
+    <div class="hoja anexo"${selloDemo()}>
       <div class="dh">
         <div><h1>El equipo que se instala</h1>
           <div style="font-size:11.5px;color:#6b7280;margin-top:4px">
             Folio ${esc(c.folio || "")} · ${esc(c.cliente_nombre || "")}</div></div>
-        <img src="/icons/logo.png" alt="">
+        ${imgLogo()}
       </div>
 
       <div class="foto-anexo"><img src="${c.foto_producto}" alt="Equipo del sistema fotovoltaico"></div>
@@ -1031,8 +1430,7 @@ function hojaProducto(c) {
         en el contrato.</p>
 
       <div class="pie">
-        <b>Comercializadora Marcelestial S.A.S.</b> · Perfiles de aluminio · Sistemas fotovoltaicos · Soluciones eléctricas<br>
-        WhatsApp 55 7657 4769 · contacto@marcelestial.net · www.marcelestial.net · CDMX y Estado de México
+        ${pieEmpresa()}
       </div>
     </div>`;
 }
@@ -1042,11 +1440,11 @@ function hojaProducto(c) {
    dentro del propio documento, así que no pesan nada. */
 function hojaMonitoreo() {
   return `
-    <div class="hoja monitoreo">
+    <div class="hoja monitoreo"${selloDemo()}>
       <div class="dh">
         <div><h1>Reporte de visita técnica</h1>
           <div style="font-size:11.5px;color:#6b7280;margin-top:4px">d) Sistema de monitoreo</div></div>
-        <img src="/icons/logo.png" alt="">
+        ${imgLogo()}
       </div>
 
       <p style="font-size:11.5px;line-height:1.6;color:#374151">
@@ -1094,15 +1492,16 @@ function hojaMonitoreo() {
           <circle cx="115" cy="271" r="9" fill="#dde8f6"/>
         </svg>
         <div class="tarjeta">
-          <img src="/icons/logo.png" alt="Marcelestial">
-          <div class="razon">Comercializadora Marcelestial S.A.S.</div>
-          <div class="ct"><svg width="18" height="18" viewBox="0 0 24 24" fill="#134a92"><path d="M12 2a10 10 0 0 0-8.6 15l-1.4 5 5.2-1.4A10 10 0 1 0 12 2zm5.4 14.2c-.2.6-1.2 1.1-1.7 1.2-.5.1-1 .1-1.7-.1-.4-.1-1-.3-1.6-.6-2.9-1.3-4.8-4.2-5-4.4-.1-.2-1.1-1.5-1.1-2.8 0-1.3.7-2 .9-2.2.2-.3.5-.3.7-.3h.5c.2 0 .4 0 .6.5l.8 2c.1.2.1.3 0 .5l-.4.5-.3.3c-.1.1-.3.3-.1.6.2.3.8 1.4 1.8 2.2 1.3 1.1 2.3 1.5 2.6 1.6.3.1.5.1.7-.1l.7-.9c.2-.3.4-.2.6-.1l2 .9c.2.1.4.2.4.3.1.1.1.6-.1 1.2z"/></svg>
-            <b>WhatsApp:</b> 55 7657 4769</div>
-          <div class="ct"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#134a92" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>
-            contacto@marcelestial.net</div>
-          <div class="ct"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#134a92" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
-            www.marcelestial.net</div>
+          ${imgLogo()}
+          <div class="razon">${esc(empresa().razon_social)}</div>
+          ${empresa().whatsapp ? `<div class="ct"><svg width="18" height="18" viewBox="0 0 24 24" fill="#134a92"><path d="M12 2a10 10 0 0 0-8.6 15l-1.4 5 5.2-1.4A10 10 0 1 0 12 2zm5.4 14.2c-.2.6-1.2 1.1-1.7 1.2-.5.1-1 .1-1.7-.1-.4-.1-1-.3-1.6-.6-2.9-1.3-4.8-4.2-5-4.4-.1-.2-1.1-1.5-1.1-2.8 0-1.3.7-2 .9-2.2.2-.3.5-.3.7-.3h.5c.2 0 .4 0 .6.5l.8 2c.1.2.1.3 0 .5l-.4.5-.3.3c-.1.1-.3.3-.1.6.2.3.8 1.4 1.8 2.2 1.3 1.1 2.3 1.5 2.6 1.6.3.1.5.1.7-.1l.7-.9c.2-.3.4-.2.6-.1l2 .9c.2.1.4.2.4.3.1.1.1.6-.1 1.2z"/></svg>
+            <b>WhatsApp:</b> ${esc(empresa().whatsapp)}</div>` : ""}
+          ${empresa().correo ? `<div class="ct"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#134a92" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>
+            ${esc(empresa().correo)}</div>` : ""}
+          ${empresa().web ? `<div class="ct"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#134a92" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+            ${esc(empresa().web)}</div>` : ""}
           <div class="nota">Atención y cotizaciones vía WhatsApp — te contactamos de inmediato.</div>
+          ${firmaDesarrollo()}
         </div>
       </div>
     </div>`;
@@ -1135,12 +1534,12 @@ function tablaRecuperacion(c, inversion) {
   const anios = (filas.length / 12).toFixed(1);
 
   return `
-    <div class="hoja recuperacion">
+    <div class="hoja recuperacion"${selloDemo()}>
       <div class="dh">
         <div><h1>Recuperación de la inversión</h1>
           <div style="font-size:11.5px;color:#6b7280;margin-top:4px">
             Folio ${esc(c.folio || "")} · ${esc(c.cliente_nombre || "")}</div></div>
-        <img src="/icons/logo.png" alt="">
+        ${imgLogo()}
       </div>
 
       <div class="campos" style="margin-bottom:12px">
@@ -1170,8 +1569,7 @@ function tablaRecuperacion(c, inversion) {
         según la fecha real de interconexión.</p>
 
       <div class="pie">
-        <b>Comercializadora Marcelestial S.A.S.</b> · Perfiles de aluminio · Sistemas fotovoltaicos · Soluciones eléctricas<br>
-        WhatsApp 55 7657 4769 · contacto@marcelestial.net · www.marcelestial.net · CDMX y Estado de México
+        ${pieEmpresa()}
       </div>
     </div>`;
 }
@@ -1621,16 +2019,16 @@ function pintarRecibo() {
 
     <div class="card">
       <h3>Tarifa del recibo</h3>
-      <label class="f"><span>Tarifa</span>
+      <label class="f"><span>Tarifa ${pista("tarifa")}</span>
         <select id="rcTarifa" onchange="cambiarTarifa(this.value)">
           ${listaTarifas().map((t) => `<option value="${esc(t.clave)}" ${t.clave === tar.clave ? "selected" : ""}>${esc(t.nombre)}</option>`).join("")}
         </select></label>
-      <label class="f"><span>Nº de servicio</span>
+      <label class="f"><span>Nº de servicio ${pista("servicio")}</span>
         <input id="rcServicio" inputmode="numeric" placeholder="viene arriba en el recibo"></label>
 
       ${esMedia ? `
         <div class="grid2">
-          <label class="f"><span>Tensión de interconexión</span>
+          <label class="f"><span>Tensión de interconexión ${pista("tension")}</span>
             <select id="rcTension" onchange="calcRecibo()">
               ${(tar.tensiones || []).map((v) => `<option ${v === "440" ? "selected" : ""}>${v}</option>`).join("")}
             </select></label>
@@ -1662,17 +2060,17 @@ function pintarRecibo() {
       <h3>Consumo y pago</h3>
       ${tar.horaria ? `
         <div class="grid3">
-          <label class="f"><span>Base (kWh)</span><input type="number" id="rcBase" value="0" inputmode="numeric"></label>
+          <label class="f"><span>Base (kWh) ${pista("consumo")}</span><input type="number" id="rcBase" value="0" inputmode="numeric"></label>
           <label class="f destaca"><span>Intermedia (kWh)</span><input type="number" id="rcInter" value="0" inputmode="numeric"></label>
           <label class="f"><span>Punta (kWh)</span><input type="number" id="rcPunta" value="0" inputmode="numeric"></label>
         </div>
         <p style="font-size:11.5px;color:var(--slate);margin-top:-4px;margin-bottom:10px">
           La <b style="color:var(--sky)">intermedia</b> es donde actúan los paneles.</p>`
       : `
-        <label class="f"><span>Consumo del periodo (kWh)</span>
+        <label class="f"><span>Consumo del periodo (kWh) ${pista("consumo")}</span>
           <input type="number" id="rcConsumo" value="0" inputmode="numeric"></label>`}
       <div class="grid2">
-        <label class="f"><span>Periodo facturado · del</span>
+        <label class="f"><span>Periodo facturado · del ${pista("periodo")}</span>
           <input type="date" id="rcDel" onchange="calcularDias()"></label>
         <label class="f"><span>al</span>
           <input type="date" id="rcAl" onchange="calcularDias()"></label>
@@ -1694,11 +2092,11 @@ function pintarRecibo() {
         <label class="f"><span>Tipo de panel</span><select id="rcPanel" onchange="calcRecibo()">
           ${paneles.map((x) => `<option ${x.clave === "710 W" ? "selected" : ""}>${esc(x.clave)}</option>`).join("")}
         </select></label>
-        <label class="f"><span>Módulos a cotizar</span>
+        <label class="f"><span>Módulos a cotizar ${pista("modulos")}</span>
           <input type="number" id="rcModulos" placeholder="automático" inputmode="numeric"></label>
         <label class="f"><span>Inversores</span>
           <input type="number" id="rcInversores" placeholder="automático" inputmode="numeric"></label>
-        <label class="f"><span>Precio por panel ($)</span>
+        <label class="f"><span>Precio por panel ($) ${pista("precio")}</span>
           <input type="number" id="rcPrecio" placeholder="según tarifa" ${esDueno() ? "" : "readonly"}></label>
       </div>
       <p style="font-size:11.5px;color:var(--slate)">
@@ -1792,6 +2190,29 @@ async function tomarFoto(ev) {
   } finally { ev.target.value = ""; }
 }
 
+window.formEmpresa = formEmpresa;
+
+/* Descarga el respaldo como archivo. Sigue funcionando con la licencia vencida:
+   la información capturada es del cliente, no de quien le vendió la aplicación. */
+window.descargarRespaldo = async (btn) => {
+  const antes = btn.textContent;
+  btn.disabled = true; btn.textContent = "Preparando…";
+  try {
+    const datos = await api("respaldo");
+    const hoy = new Date().toISOString().slice(0, 10);
+    const nombre = (empresa().razon_social || "respaldo")
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40);
+    const blob = new Blob([JSON.stringify(datos, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `respaldo_${nombre}_${hoy}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  } catch (x) {
+    alert("No se pudo generar el respaldo: " + x.message);
+  } finally { btn.disabled = false; btn.textContent = antes; }
+};
 window.quitarFoto = () => { S.rcFoto = null; pintarFoto(); };
 
 /* ---- foto del producto: se elige del carrete y SÍ se imprime ----
@@ -2378,7 +2799,7 @@ window.verVistaSitio = async function (boton) {
   calcularCaben();
   await conBoton(boton, async () => {
     try {
-      const r = await MCSitio.generarVistaSitio(S.edSitioFoto, S.edSitio, tec, "/icons/logo.png");
+      const r = await MCSitio.generarVistaSitio(S.edSitioFoto, S.edSitio, tec, logoEmpresa());
       S.edSitioImagen = r.url;
       const reparto = r.areas > 1
         ? " " + r.porArea.map((n, i) => `Área ${i + 1}: ${n}.`).join(" ")
@@ -2739,6 +3160,151 @@ function formDimensionamiento() {
     } catch (x) { aviso("#modalError", x.message); }
   });
 }
+
+
+/* ---- datos de la empresa que firma las propuestas (solo dueño) ----
+   Es lo que permite que cada instalación salga con su propio nombre y logo
+   en lugar de los de quien escribió la aplicación. */
+function formEmpresa() {
+  const E = empresa();
+  const campo = (k, etq, ayuda = "") =>
+    `<label class="f"><span>${etq}</span>
+       <input name="${k}" value="${esc(E[k] || "")}" autocomplete="off">
+       ${ayuda ? `<small style="color:var(--slate)">${ayuda}</small>` : ""}
+     </label>`;
+  abrirModal("Datos de la empresa", `
+    <p style="font-size:13px;color:var(--slate);margin-bottom:14px">
+      Esto es lo que aparece en las cotizaciones, en los vales de almacén y en la
+      hoja de contacto. Cámbialo y todas las propuestas que imprimas de aquí en
+      adelante salen con estos datos.</p>
+    <form id="fEmpresa">
+      ${campo("razon_social", "Razón social *")}
+      ${campo("giro", "Giro", "Sale bajo el nombre. Ejemplo: Sistemas fotovoltaicos · Soluciones eléctricas")}
+      ${campo("whatsapp", "WhatsApp")}
+      ${campo("correo", "Correo")}
+      ${campo("web", "Sitio web")}
+      ${campo("cobertura", "Zona que atiende", "Ejemplo: CDMX y Estado de México")}
+      ${campo("titulo_propuesta", "Título de la portada",
+              "El encabezado grande de la primera hoja. Si lo dejas vacío se usa el de siempre.")}
+
+      <div class="f">
+        <span>Logo ${pista("logo")}</span>
+        <div style="display:flex;gap:12px;align-items:center;margin-top:6px">
+          <div id="empLogoPrev" style="width:96px;height:96px;border:1px dashed #cbd5e1;border-radius:8px;
+               display:flex;align-items:center;justify-content:center;overflow:hidden;background:#fff">
+            <img src="${logoEmpresa()}" alt="" style="max-width:100%;max-height:100%">
+          </div>
+          <div>
+            <label class="btn sm" style="display:inline-block">
+              Elegir logo
+              <input type="file" accept="image/*" style="display:none" onchange="subirLogo(event)">
+            </label>
+            <button type="button" class="btn sm" onclick="quitarLogo()">Quitar</button>
+            <small style="display:block;color:var(--slate);margin-top:6px">
+              PNG o JPG. Se guarda dentro de la aplicación; no hace falta subirlo al servidor.</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="f">
+        <span>Foto de portada</span>
+        <div style="display:flex;gap:12px;align-items:center;margin-top:6px">
+          <div id="empPortPrev" style="width:140px;height:80px;border:1px dashed #cbd5e1;border-radius:8px;
+               display:flex;align-items:center;justify-content:center;overflow:hidden;background:#fff">
+            ${portadaEmpresa() ? `<img src="${portadaEmpresa()}" alt="" style="width:100%;height:100%;object-fit:cover">`
+                               : `<small style="color:var(--slate)">Sin foto</small>`}
+          </div>
+          <div>
+            <label class="btn sm" style="display:inline-block">
+              Elegir foto
+              <input type="file" accept="image/*" style="display:none" onchange="subirPortada(event)">
+            </label>
+            <button type="button" class="btn sm" onclick="quitarPortada()">Quitar</button>
+            <small style="display:block;color:var(--slate);margin-top:6px">
+              La banda ancha de la primera hoja. Sin foto, la portada sale sin ella.</small>
+          </div>
+        </div>
+      </div>
+
+      <h3 style="margin:18px 0 4px">Misión y visión</h3>
+      <p style="font-size:13px;color:var(--slate);margin-bottom:10px">
+        Es el texto de la portada. <b>Déjalo vacío y ese bloque no se imprime</b>, en lugar de
+        salir con palabras que no son de tu empresa.</p>
+      <label class="f"><span>Título de la misión</span>
+        <input name="mision_titulo" value="${esc(E.mision_titulo || "")}" autocomplete="off"></label>
+      <label class="f"><span>Misión</span>
+        <textarea name="mision_texto" rows="5">${esc(E.mision_texto || "")}</textarea></label>
+      <label class="f"><span>Título de la visión</span>
+        <input name="vision_titulo" value="${esc(E.vision_titulo || "")}" autocomplete="off"></label>
+      <label class="f"><span>Visión</span>
+        <textarea name="vision_texto" rows="5">${esc(E.vision_texto || "")}</textarea></label>
+
+      <div id="modalError"></div>
+      <button class="btn pri" type="submit">Guardar</button>
+    </form>`);
+  S.empLogo = E.logo || "";
+  S.empPortada = E.portada || "";
+  document.querySelector("#fEmpresa").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const d = Object.fromEntries(new FormData(ev.target));
+    if (!String(d.razon_social || "").trim())
+      return aviso("#modalError", "La razón social no puede quedar vacía: es lo que firma la cotización.");
+    try {
+      await api("config", { method: "PATCH", body: { clave: "empresa", valor: {
+        razon_social: d.razon_social, giro: d.giro, whatsapp: d.whatsapp,
+        correo: d.correo, web: d.web, cobertura: d.cobertura,
+        titulo_propuesta: d.titulo_propuesta, logo: S.empLogo || "",
+        mision_titulo: d.mision_titulo, mision_texto: d.mision_texto,
+        vision_titulo: d.vision_titulo, vision_texto: d.vision_texto,
+        portada: S.empPortada || "",
+      } } });
+      await cargarConfig();
+      cerrarModal();
+      alert("Datos de la empresa actualizados.");
+    } catch (x) { aviso("#modalError", x.message); }
+  });
+}
+
+/* El logo se reduce antes de guardarlo: entra a la base como data URL. */
+window.subirLogo = async (ev) => {
+  const archivo = ev.target.files && ev.target.files[0];
+  if (!archivo) return;
+  try {
+    let datos = await comprimirImagen(archivo, 600, 0.9);
+    if (datos.length > 500000) datos = await comprimirImagen(archivo, 400, 0.8);
+    S.empLogo = datos;
+    document.querySelector("#empLogoPrev").innerHTML =
+      `<img src="${datos}" alt="" style="max-width:100%;max-height:100%">`;
+  } catch {
+    aviso("#modalError", "No se pudo leer la imagen. Intenta con otro archivo.");
+  } finally { ev.target.value = ""; }
+};
+
+window.subirPortada = async (ev) => {
+  const archivo = ev.target.files && ev.target.files[0];
+  if (!archivo) return;
+  try {
+    let datos = await comprimirImagen(archivo, 1600, 0.78);
+    if (datos.length > 1500000) datos = await comprimirImagen(archivo, 1200, 0.68);
+    S.empPortada = datos;
+    document.querySelector("#empPortPrev").innerHTML =
+      `<img src="${datos}" alt="" style="width:100%;height:100%;object-fit:cover">`;
+  } catch {
+    aviso("#modalError", "No se pudo leer la imagen. Intenta con otro archivo.");
+  } finally { ev.target.value = ""; }
+};
+
+window.quitarPortada = () => {
+  S.empPortada = "";
+  document.querySelector("#empPortPrev").innerHTML =
+    `<small style="color:var(--slate)">Sin foto</small>`;
+};
+
+window.quitarLogo = () => {
+  S.empLogo = "";
+  document.querySelector("#empLogoPrev").innerHTML =
+    `<img src="/icons/logo.png" alt="" style="max-width:100%;max-height:100%">`;
+};
 
 /* ---- tarifas y precios por panel (solo dueño) ---- */
 function formTarifas() {
@@ -3810,17 +4376,17 @@ function hojaVale(v) {
   const titulo = { salida: "VALE DE SALIDA DE ALMACÉN", entrada: "VALE DE ENTRADA DE ALMACÉN", devolucion: "VALE DE DEVOLUCIÓN A ALMACÉN" }[v.tipo];
   const leyenda = {
     salida: "Quien recibe declara haber revisado y recibido el material descrito, en la cantidad y condiciones indicadas. A partir de este momento el material queda bajo su resguardo y responsabilidad. Cualquier faltante o daño debe reportarse al momento de la entrega.",
-    entrada: "Se hace constar la recepción del material descrito en el almacén de Comercializadora Marcelestial S.A.S., en la cantidad indicada. Las diferencias contra la remisión o factura del proveedor se anotan en observaciones.",
+    entrada: `Se hace constar la recepción del material descrito en el almacén de ${empresa().razon_social}, en la cantidad indicada. Las diferencias contra la remisión o factura del proveedor se anotan en observaciones.`,
     devolucion: "Se hace constar la devolución al almacén del material sobrante de la obra indicada, en la cantidad y condiciones descritas.",
   }[v.tipo];
   return `
-    <div class="hoja vale ${v.cancelado_en ? "cancelado" : ""}">
+    <div class="hoja vale ${v.cancelado_en ? "cancelado" : ""}"${selloDemo()}>
       <div class="dh">
         <div>
           <h1>${titulo}</h1>
-          <div style="font-size:11.5px;color:#6b7280;margin-top:4px">Comercializadora Marcelestial S.A.S. · Perfiles de aluminio para sistemas fotovoltaicos</div>
+          <div style="font-size:11.5px;color:#6b7280;margin-top:4px">${esc(empresa().razon_social)}${empresa().giro ? " · " + esc(empresa().giro) : ""}</div>
         </div>
-        <img src="/icons/logo.png" alt="">
+        ${imgLogo()}
       </div>
 
       <div class="vale-folio">
@@ -3868,7 +4434,7 @@ function hojaVale(v) {
       </div>
 
       <div class="pie">
-        <b>Comercializadora Marcelestial S.A.S.</b> · WhatsApp 55 7657 4769 · contacto@marcelestial.net · www.marcelestial.net<br>
+        <b>${esc(empresa().razon_social)}</b> · ${contactoEmpresa()}<br>
         Capturó ${esc(v.capturo || "")} · ${fecha(v.creado_en)}${v.creado_en ? " " + new Date(v.creado_en).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" }) : ""} ·
         Original: almacén · Copia: quien recibe
       </div>
@@ -4010,6 +4576,158 @@ async function pintarValesDeCliente(clienteId) {
   } catch (e) { if ($("#valCli")) $("#valCli").innerHTML = `<div class="vacio">${esc(e.message)}</div>`; }
 }
 
+
+/* ---------------- ayuda dentro de la app ----------------
+   Vive aquí, en el código, no en un servidor: en un techo sin señal la ayuda
+   sigue estando. Cada tema se abre desde el signo de interrogación que está
+   junto al campo que lo necesita, que es donde nace la duda; un manual aparte
+   nadie lo va a buscar. */
+const AYUDA = {
+  tarifa: {
+    titulo: "¿Qué tarifa es?",
+    texto: `<p>Viene impresa arriba del recibo, junto al número de servicio. Las más comunes
+      son <b>GDMTH</b> y <b>GDMTO</b> en negocios e industria, <b>PDBT</b> en comercios chicos
+      y <b>01 o 02</b> en casas.</p>
+      <p>Si le atinas mal a la tarifa, el precio del proyecto sale mal: cada tarifa tiene su
+      propia tabla de precios por módulo.</p>`,
+  },
+  servicio: {
+    titulo: "Número de servicio",
+    texto: `<p>Son doce dígitos y vienen arriba a la izquierda del recibo, como
+      <b>NO. DE SERVICIO</b>. Es el identificador del medidor ante CFE.</p>
+      <p>No es obligatorio para cotizar, pero guárdalo: cuando el cliente te pida la propuesta
+      otra vez, lo buscas por ese número y lo encuentras al instante.</p>`,
+  },
+  tension: {
+    titulo: "Tensión de interconexión",
+    texto: `<p>Es a cuántos volts está conectado el servicio. En media tensión casi siempre es
+      <b>220</b> o <b>440</b>.</p>
+      <p>El recibo no siempre lo dice. Si no viene, pregúntalo en obra o revisa la placa del
+      tablero. En caso de duda, la mayoría de los servicios trifásicos comerciales en México
+      son 220.</p>
+      <p>Importa porque el precio por módulo cambia según la tensión.</p>`,
+  },
+  consumo: {
+    titulo: "Base, intermedia y punta",
+    texto: `<p>Son los kWh del recibo partidos por horario del día. Cópialos tal como vienen,
+      sin sumarlos.</p>
+      <p>La <b>intermedia</b> es la que más pesa y es donde trabajan los paneles: es la energía
+      que se consume con luz de día.</p>
+      <p>Si tu recibo trae un solo número de consumo, ponlo todo en intermedia.</p>`,
+  },
+  periodo: {
+    titulo: "El periodo facturado",
+    texto: `<p>Las dos fechas del recibo: del día que empezó al día que terminó la medición.</p>
+      <p>La aplicación cuenta los días sola y de ahí saca el consumo diario, que es la base de
+      todo el cálculo. Un recibo bimestral y uno mensual se tratan distinto por eso.</p>`,
+  },
+  modulos: {
+    titulo: "Módulos a cotizar",
+    texto: `<p><b>Déjalo vacío</b> y la aplicación calcula cuántos paneles se necesitan para
+      cubrir todo el consumo.</p>
+      <p>Escribe un número solo cuando quieras cotizar <b>menos</b>: porque no cabe más en el
+      techo, o porque el cliente quiere empezar chico e ir creciendo.</p>
+      <p>Al bajarlos, abajo te dice cuánto va a seguir pagando el cliente a CFE.</p>`,
+  },
+  precio: {
+    titulo: "Precio por panel",
+    texto: `<p>Déjalo vacío y sale de tu tabla de tarifas, con el escalón que corresponda a la
+      cantidad de módulos.</p>
+      <p>Escríbelo solo para dar un precio distinto en esta cotización. La aplicación te avisa
+      cuánto marcaba la tarifa, para que sepas cuánto estás moviendo.</p>
+      <p>Si el campo no te deja escribir, es porque eres vendedor: los precios los define el
+      administrador.</p>`,
+  },
+  hileras: {
+    titulo: "¿Por qué preguntamos las hileras?",
+    texto: `<p>Porque el material no es proporcional al número de paneles.</p>
+      <p>El clamp que queda <b>entre dos paneles sujeta a los dos a la vez</b>: detiene el
+      borde de uno y el del siguiente. Solo los de las orillas sujetan un panel solo.</p>
+      <p>Por eso la cuenta es <b>2 piezas por panel más 2 por hilera</b>. Un panel solo lleva
+      4 piezas; dos en línea llevan 6, no 8. Entre más hileras, más orillas, más material.</p>
+      <p>Cuenta las hileras en el techo: 51 paneles en 3 hileras llevan 108 piezas; los mismos
+      51 en 5 hileras llevan 112.</p>`,
+  },
+  ganada: {
+    titulo: "El estatus de la cotización",
+    texto: `<p><b>Borrador</b> mientras la armas. <b>Enviada</b> cuando ya se la mandaste al
+      cliente. <b>En negociación</b> si están afinando. <b>Ganada</b> cuando la autorizó.
+      <b>Perdida</b> si se cayó.</p>
+      <p>Sirve para dos cosas: el panel te dice cuánto llevas ganado en el mes, y al marcar
+      <b>Ganada</b> aparece la tarjeta para pedir el material de montaje.</p>`,
+  },
+  logo: {
+    titulo: "Tu logo",
+    texto: `<p>Sale en la portada de cada propuesta, en la pantalla de acceso y en los vales
+      de almacén.</p>
+      <p>Lo mejor es un <b>PNG con fondo transparente</b>. Si es JPG con fondo blanco también
+      sirve, pero sobre la barra azul se va a ver el cuadro blanco.</p>
+      <p>Mientras más grande el archivo, mejor se imprime. Si mandas una captura borrosa de
+      redes sociales, así va a salir en todas tus cotizaciones.</p>`,
+  },
+  usuarios: {
+    titulo: "Dar de alta a tu gente",
+    texto: `<p>Captura su nombre y su correo, y <b>deja la contraseña vacía</b>. Sale un enlace
+      que le mandas por WhatsApp; al abrirlo elige su propia contraseña y nadie más la conoce.</p>
+      <p>El enlace vale 7 días y sirve una sola vez. Si se pierde, usa <b>Volver a invitar</b>
+      en su ficha: genera uno nuevo y anula el anterior.</p>
+      <p>Ese mismo botón resuelve el «olvidé mi contraseña».</p>
+      <p><b>Si se pierde un teléfono</b>, cámbiale la contraseña a esa cuenta: su sesión se
+      cierra al instante en todos lados.</p>`,
+  },
+  puestos: {
+    titulo: "Qué puede hacer cada puesto",
+    texto: `<p><b>Administrador:</b> todo, incluidos precios, usuarios y datos de la empresa.</p>
+      <p><b>Vendedor:</b> cotiza, ve precios y atiende clientes. No mueve el almacén ni cambia
+      tarifas.</p>
+      <p><b>Almacén:</b> entradas, salidas, devoluciones y conteos. Ve el catálogo
+      <b>sin precios</b> y no puede cotizar.</p>`,
+  },
+  vales: {
+    titulo: "Nada sale del almacén sin vale",
+    texto: `<p>Un vale registra qué material se fue, a qué cliente y a qué obra, con fecha,
+      quién entregó y quién recibió, con su firma en la pantalla.</p>
+      <p><b>Salida</b> descuenta, <b>entrada</b> suma, <b>devolución</b> suma el sobrante que
+      regresa de obra y se liga al vale de salida original.</p>
+      <p>Las cantidades de un vale <b>no se editan</b>: si te equivocaste, se cancela con motivo
+      y se hace otro. Así el kardex nunca miente.</p>`,
+  },
+  respaldo: {
+    titulo: "Tu información es tuya",
+    texto: `<p>El respaldo baja en un archivo todo lo capturado: clientes, cotizaciones,
+      catálogo, almacén y vales.</p>
+      <p>Lo puedes descargar cuando quieras, <b>también si la licencia ya venció</b>.</p>
+      <p>No incluye contraseñas ni fotografías. Las fotos se conservan imprimiendo cada
+      cotización o guardándola como PDF.</p>`,
+  },
+};
+
+/* El signo de interrogación que se pone junto a una etiqueta. */
+const pista = (clave) =>
+  `<button type="button" class="pista" title="Ayuda" onclick="ayuda('${clave}')">?</button>`;
+
+window.ayuda = (clave) => {
+  const t = AYUDA[clave];
+  if (!t) return;
+  abrirModal(t.titulo, `
+    <div class="ayuda-texto">${t.texto}</div>
+    <div class="ayuda-pie">
+      ¿No resolviste la duda? Escríbenos por WhatsApp
+      <a href="https://wa.me/525576574769" target="_blank" rel="noopener">55 7657 4769</a>.
+    </div>
+    <button class="btn sec full" style="margin-top:14px" onclick="cerrarModal()">Entendido</button>`);
+};
+
+/* Índice completo, para quien quiere leer de corrido. */
+window.verAyuda = () => {
+  abrirModal("Cómo se usa", `
+    <p style="font-size:13px;color:var(--slate);margin-bottom:14px">
+      También encuentras estas explicaciones como <b>?</b> junto a cada campo, mientras
+      capturas.</p>
+    ${Object.entries(AYUDA).map(([k, t]) => `
+      <div class="item" onclick="ayuda('${k}')"><b>${esc(t.titulo)}</b></div>`).join("")}`);
+};
+
 /* ---------------- más ---------------- */
 function verMas() {
   $("#masContenido").innerHTML = `
@@ -4023,7 +4741,32 @@ function verMas() {
         <button class="btn sec sm" onclick="formPassword()">Cambiar contraseña</button>
       </div>
     </div>
+
+    <div class="card">
+      <h3>Cómo se usa</h3>
+      <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
+        Explicaciones cortas de cada parte. Las mismas aparecen como <b>?</b> junto a los
+        campos mientras capturas, y funcionan aunque no tengas internet.</p>
+      <button class="btn pri sm" onclick="verAyuda()">Ver la ayuda</button>
+    </div>
+
+    <!-- Firma del desarrollador: se queda igual aunque la instalación lleve
+         la marca de otra empresa. -->
+    <div class="card hecho-por">
+      <img src="/icons/logo.png" alt="">
+      <div>
+        <b>Comercializadora Marcelestial S.A.S.</b>
+        <span>Desarrollo del cotizador · Perfiles de aluminio y sistemas fotovoltaicos</span>
+        <a href="https://wa.me/525576574769" target="_blank" rel="noopener">WhatsApp 55 7657 4769</a>
+      </div>
+    </div>
     ${esDueno() ? `
+    <div class="card">
+      <h3>Datos de la empresa</h3>
+      <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
+        Nombre, logo y contacto que salen impresos en las cotizaciones y en los vales.</p>
+      <button class="btn pri sm" onclick="formEmpresa()">Configurar empresa</button>
+    </div>
     <div class="card">
       <h3>Catálogo y precios</h3>
       <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
@@ -4056,7 +4799,7 @@ function verMas() {
       <button class="btn pri sm" onclick="formInversores()">Configurar inversores</button>
     </div>
     <div class="card">
-      <h3>Usuarios</h3>
+      <h3>Usuarios ${pista("usuarios")}</h3>
       <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
         Vendedores, almacén y administradores: da de alta al equipo y controla quién tiene acceso.</p>
       <button class="btn pri sm" onclick="verUsuarios()">Administrar usuarios</button>
@@ -4077,6 +4820,28 @@ function verMas() {
         este botón la deja como nueva: <b>borra todo lo capturado</b> y vuelve a sembrar los
         clientes y las cotizaciones de ejemplo.</p>
       <button class="btn dan sm" onclick="reiniciarDemo(this)">Reiniciar la demostración</button>
+    </div>` : ""}
+    ${S.demo && S.licencia && S.licencia.topes && (S.licencia.topes.usuarios || S.licencia.topes.cotizaciones) ? `
+    <div class="card">
+      <h3>Versión de prueba</h3>
+      <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
+        Trabaja con <b>${S.licencia.topes.usuarios || "las"} cuentas</b> y
+        <b>${S.licencia.topes.cotizaciones || "las"} cotizaciones</b>.
+        ${S.licencia.vence ? `Vence el <b>${fechaLarga(S.licencia.vence)}</b>.` : ""}
+        En la versión completa no hay topes ni marca de agua en los PDF.</p>
+      ${S.licencia.contacto ? `<a class="btn pri sm" target="_blank" rel="noopener"
+         href="https://wa.me/${String(S.licencia.contacto).replace(/\D/g, "")}?text=${
+           encodeURIComponent("Hola, uso la versión de prueba del cotizador y quiero la versión completa.")
+         }">Quiero la versión completa</a>` : ""}
+    </div>` : ""}
+    ${esDueno() ? `<div class="card">
+      <h3>Respaldo de tu información ${pista("respaldo")}</h3>
+      <p style="font-size:13px;color:var(--slate);margin-bottom:12px">
+        Descarga en un archivo todo lo que has capturado: clientes, cotizaciones, catálogo,
+        almacén y vales. <b>Es tuyo y lo puedes bajar cuando quieras</b>, también si la
+        licencia ya venció. No incluye contraseñas ni fotografías; las fotos se guardan
+        desde el botón de imprimir de cada cotización.</p>
+      <button class="btn pri sm" onclick="descargarRespaldo(this)">Descargar respaldo</button>
     </div>` : ""}
     ${esDueno() ? `<div class="card">
       <h3>Datos de ejemplo</h3>
@@ -4222,14 +4987,22 @@ function formUsuario(id = null) {
       <label class="f"><span>Correo *</span>
         <input name="correo" type="email" ${id ? "" : "required"} value="${esc(u.correo || "")}"></label>
       <label class="f"><span>Teléfono</span><input name="telefono" value="${esc(u.telefono || "")}"></label>
-      <label class="f"><span>${id ? "Nueva contraseña (opcional)" : "Contraseña * (mínimo 8)"}</span>
-        <input name="password" type="password" ${id ? "" : "required minlength=8"}></label>
+      <label class="f"><span>${id ? "Nueva contraseña (opcional)" : "Contraseña (opcional)"}</span>
+        <input name="password" type="password" minlength="8"
+               placeholder="${id ? "" : "Déjala vacía para invitarlo"}"></label>
+      ${id ? "" : `<small style="display:block;color:var(--slate);margin:-6px 0 14px">
+        Si la dejas vacía se genera un <b>enlace de invitación</b> y esa persona elige su
+        propia contraseña. Es lo recomendado: así nadie más la conoce.</small>`}
       ${id ? `<label class="f"><span>Estado</span><select name="activo">
         <option value="true" ${u.activo ? "selected" : ""}>Activo</option>
         <option value="false" ${u.activo ? "" : "selected"}>Inactivo (sin acceso)</option></select></label>` : ""}
       <button class="btn pri full" type="submit">Guardar</button>
     </form>
     ${id && id !== S.yo.id ? `<div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--line)">
+      <button class="btn sec full" style="margin-bottom:10px" onclick="reinvitar(${id})">Volver a invitar</button>
+      <p style="font-size:11.5px;color:var(--slate);margin:-4px 0 14px">
+        Genera un enlace nuevo para que elija otra vez su contraseña. El anterior deja de servir
+        y su sesión abierta se cierra. Sirve si perdió el enlace o si olvidó la contraseña.</p>
       <button class="btn dan full" onclick="eliminarUsuario(${id})">Eliminar usuario</button>
       <p style="font-size:11.5px;color:var(--slate);margin-top:8px">
         Si solo quieres quitarle el acceso sin borrar nada, ponlo como Inactivo arriba.</p>
@@ -4240,13 +5013,55 @@ function formUsuario(id = null) {
     if (!d.password) delete d.password;
     if ("activo" in d) d.activo = d.activo === "true";
     try {
-      if (id) await api("usuarios", { method: "PATCH", body: { id, ...d } });
-      else await api("usuarios", { method: "POST", body: d });
-      verUsuarios();
+      if (id) {
+        await api("usuarios", { method: "PATCH", body: { id, ...d } });
+        verUsuarios();
+      } else {
+        const r = await api("usuarios", { method: "POST", body: d });
+        if (r.invitacion) return verInvitacion(r.usuario, r.invitacion);
+        verUsuarios();
+      }
     } catch (x) { aviso("#modalError", x.message); }
   });
 }
 
+
+/* El enlace de invitación, listo para copiar o mandar por WhatsApp. Se muestra
+   una sola vez: el código no se guarda en claro, así que si se pierde hay que
+   volver a invitar. */
+function verInvitacion(u, codigo) {
+  const liga = location.origin + location.pathname + "?activar=" + encodeURIComponent(codigo);
+  const texto = `Hola ${u.nombre}. Aquí está tu acceso al cotizador. ` +
+                `Abre este enlace y elige tu contraseña: ${liga}`;
+  abrirModal("Invitación lista", `
+    <p style="font-size:13.5px;color:var(--slate);line-height:1.6">
+      Se dio de alta a <b>${esc(u.nombre)}</b> (${esc(u.correo)}) sin contraseña.
+      Mándale este enlace: al abrirlo elige la suya y entra.</p>
+    <div class="dato-fijo" style="word-break:break-all;font-weight:500;font-size:12.5px">${esc(liga)}</div>
+    <p style="font-size:12px;color:var(--slate);margin:12px 0 16px">
+      Vale <b>7 días</b> y sirve <b>una sola vez</b>. Este enlace no se vuelve a mostrar;
+      si se pierde, usa «Volver a invitar» en su ficha.</p>
+    <div class="acciones">
+      <button class="btn pri sm" onclick="copiarTexto(${JSON.stringify(liga).replace(/"/g, "&quot;")}, this)">Copiar enlace</button>
+      <a class="btn sec sm" target="_blank" rel="noopener"
+         href="https://wa.me/?text=${encodeURIComponent(texto)}">Enviar por WhatsApp</a>
+    </div>
+    <button class="btn sec full" style="margin-top:16px" onclick="cerrarModal(); verUsuarios()">Listo</button>`);
+}
+
+window.copiarTexto = async (t, btn) => {
+  const antes = btn.textContent;
+  try { await navigator.clipboard.writeText(t); btn.textContent = "Copiado"; }
+  catch { btn.textContent = "Selecciona y copia a mano"; }
+  setTimeout(() => { btn.textContent = antes; }, 2500);
+};
+
+window.reinvitar = async (id) => {
+  try {
+    const r = await api("usuarios", { method: "PATCH", body: { id, reinvitar: true } });
+    verInvitacion(r.usuario, r.invitacion);
+  } catch (x) { alert(x.message); }
+};
 
 function formRapido() {
   const P = paramFV();

@@ -25,6 +25,21 @@ export function hashPassword(plain) {
   return `scrypt$${salt}$${hash}`;
 }
 
+/* Invitaciones de un solo uso.
+   El enlace lleva un código al azar; en la base sólo se guarda su huella, igual
+   que con las contraseñas. Si alguien se robara un respaldo de la base no podría
+   reconstruir los enlaces pendientes. */
+export function nuevoCodigo() {
+  return randomBytes(24).toString("base64url");
+}
+export function huellaDeCodigo(codigo) {
+  return createHmac("sha256", String(process.env.JWT_SECRET || "")).update(String(codigo)).digest("hex");
+}
+
+/* Una cuenta invitada todavía no tiene contraseña utilizable. Se marca así para
+   que ningún intento de inicio de sesión pueda coincidir por accidente. */
+export const SIN_PASSWORD = "pendiente-de-activacion";
+
 export function verifyPassword(plain, stored) {
   try {
     const [algo, salt, hash] = String(stored).split("$");
@@ -146,10 +161,58 @@ export async function siguienteFolioVale(tipo) {
   return `${pre}-${anio}-${String(Number(r?.n || 0) + 1).padStart(4, "0")}`;
 }
 
+/* Folio de la orden de compra al proveedor: OC-2026-0001, por año. */
+export async function siguienteFolioOrden() {
+  const anio = new Date().getFullYear();
+  const [r] = await db.sql`
+    SELECT COALESCE(MAX(NULLIF(regexp_replace(substring(folio from 9), '[^0-9]', '', 'g'), '')::int), 0) AS n
+      FROM ordenes
+     WHERE folio LIKE ${"OC-" + anio + "-%"}`;
+  return `OC-${anio}-${String(Number(r?.n || 0) + 1).padStart(4, "0")}`;
+}
+
+/* Precio por escalón de volumen. Los escalones vienen ordenados de menor a
+   mayor; "hasta: 0" es el último y significa "de ahí en adelante". Se cobra el
+   escalón que corresponde a la cantidad TOTAL del renglón, no por pieza. */
+export function precioPorVolumen(escalones, cantidad) {
+  const lista = Array.isArray(escalones) ? escalones : [];
+  for (const e of lista) {
+    const hasta = Number(e.hasta) || 0;
+    if (hasta === 0 || cantidad <= hasta) return Number(e.precio) || 0;
+  }
+  return Number(lista[lista.length - 1]?.precio) || 0;
+}
+
+/* Material que consume un proyecto.
+   Los puntos de sujeción interiores se comparten entre paneles vecinos: un riel
+   con su clamp detiene el borde de un panel y el del siguiente. Por hilera de n
+   paneles cada una de las dos líneas de riel lleva n+1 posiciones, así que:
+       piezas = por_modulo × módulos + por_hilera × hileras
+   Con por_modulo = 2 y por_hilera = 2 eso da 4 piezas para un panel solo y 6
+   para dos en línea, que es como se montan en obra.
+   La regla vive en el catálogo, no aquí: así entran productos nuevos sin tocar
+   código. */
+export function materialDeProyecto(catalogo, modulos, hileras = 1) {
+  const n = Math.max(0, Math.floor(Number(modulos) || 0));
+  const h = Math.min(n, Math.max(1, Math.floor(Number(hileras) || 1)));
+  return (catalogo?.productos || [])
+    .filter((p) => Number(p.por_modulo) > 0 || Number(p.por_hilera) > 0)
+    .map((p) => {
+      const cantidad = n * (Number(p.por_modulo) || 0) + h * (Number(p.por_hilera) || 0);
+      const precio = precioPorVolumen(p.escalones, cantidad);
+      return {
+        clave: p.clave, nombre: p.nombre, detalle: p.detalle || "",
+        unidad: p.unidad || "pza",
+        por_modulo: Number(p.por_modulo) || 0, por_hilera: Number(p.por_hilera) || 0,
+        cantidad, precio, importe: +(cantidad * precio).toFixed(2),
+      };
+    });
+}
+
 /* Un folio repetido todavía puede colarse si dos vendedores guardan en el mismo
    instante. En ese caso se vuelve a intentar con el siguiente número. */
 export const esFolioRepetido = (e) =>
-  /duplicate key|23505|cotizaciones_folio|vales_folio/i.test(
+  /duplicate key|23505|cotizaciones_folio|vales_folio|ordenes_folio/i.test(
     [e?.message, e?.detail, e?.constraint,
      e?.cause?.message, e?.cause?.detail, e?.cause?.constraint].filter(Boolean).join(" ")
   );

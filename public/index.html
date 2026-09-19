@@ -24,6 +24,7 @@
 <div class="gate" id="gate">
   <div class="gate-card">
     <img class="gate-logo" src="/icons/logo.png" alt="Marcelestial">
+    <div class="filo"></div>
     <h1 id="gateTitulo">Cotizador Marcelestial</h1>
     <p class="sub" id="gateSub">Ingresa con tu cuenta de vendedor</p>
     <div class="aviso err" id="gateError"></div>
@@ -40,6 +41,24 @@
       <label class="f"><span>Contraseña (mínimo 8)</span><input type="password" name="password" minlength="8" required></label>
       <button class="btn pri full" type="submit">Crear cuenta de administrador</button>
     </form>
+
+    <!-- Activación por invitación: la persona llega aquí desde el enlace que le
+         enviaron y elige su propia contraseña. Nadie más la conoce. -->
+    <form id="formActivar" hidden>
+      <div class="f"><span>Tu cuenta</span><div id="activarQuien" class="dato-fijo"></div></div>
+      <label class="f"><span>Elige tu contraseña (mínimo 8)</span>
+        <input type="password" name="password" minlength="8" required autocomplete="new-password"></label>
+      <label class="f"><span>Escríbela otra vez</span>
+        <input type="password" name="password2" minlength="8" required autocomplete="new-password"></label>
+      <button class="btn pri full" type="submit">Entrar por primera vez</button>
+    </form>
+  </div>
+
+  <!-- Firma de quien hizo la aplicación. Se queda fija aunque la instalación
+       lleve la marca de otra empresa: es el crédito del desarrollador. -->
+  <div class="credito">
+    <img src="/icons/logo-blanco.png" alt="">
+    <span>Una aplicación de<br><b>Comercializadora Marcelestial S.A.S.</b></span>
   </div>
 </div>
 

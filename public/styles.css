@@ -11,13 +11,76 @@ body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background
 img{max-width:100%;display:block}
 button,input,select,textarea{font:inherit;color:inherit}
 
-/* ---------- acceso ---------- */
-.gate{min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:24px;
-  background:linear-gradient(150deg,#04142E,#0A2A5E 55%,#062246)}
-.gate-card{width:100%;max-width:400px;background:#fff;border-radius:20px;padding:30px 26px;box-shadow:0 20px 60px rgba(0,0,0,.35)}
+/* ---------- acceso ----------
+   Amanecer sobre un arreglo solar, dibujado con puro CSS: nada de fotos, para
+   que la pantalla abra al instante y funcione sin señal.
+   La tarjeta ocupa el centro, así que el ambiente vive en los extremos: el sol
+   naciente arriba a la derecha y el campo de paneles abajo, con la línea del
+   horizonte encendida entre los dos.
+   El cielo se queda oscuro y el color cálido sólo asoma, porque el mismo fondo
+   tiene que servir para un logo azul y para uno dorado. */
+.gate{
+  position:relative; overflow:hidden;
+  min-height:100dvh; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; padding:24px;
+  background:
+    radial-gradient(80% 40% at 80% 4%, rgba(255,205,130,.26) 0%, rgba(255,170,70,0) 62%),
+    radial-gradient(120% 40% at 50% 82%, rgba(60,140,235,.30) 0%, rgba(60,140,235,0) 70%),
+    linear-gradient(178deg, #020B1B 0%, #06203F 34%, #0A2F5C 62%, #0E3C72 82%, #0A2B52 100%);
+}
+
+/* el sol naciente, arriba a la derecha */
+.gate:before{
+  content:""; position:absolute; right:-22%; top:-20%;
+  width:86vw; height:86vw; max-width:520px; max-height:520px;
+  border-radius:50%;
+  background:radial-gradient(circle,
+    rgba(255,248,232,.62) 0%, rgba(255,222,160,.38) 16%,
+    rgba(255,188,92,.20) 38%, rgba(255,170,60,0) 70%);
+  animation:respira 12s ease-in-out infinite;
+  pointer-events:none;
+}
+
+/* el campo de paneles: retícula en perspectiva, con el horizonte encendido */
+.gate:after{
+  content:""; position:absolute; left:-30%; right:-30%; bottom:0; height:34%;
+  background-image:
+    repeating-linear-gradient(90deg, rgba(168,212,255,.28) 0 1px, transparent 1px 30px),
+    repeating-linear-gradient(0deg,  rgba(168,212,255,.22) 0 1px, transparent 1px 16px),
+    linear-gradient(180deg, rgba(10,40,80,.10) 0%, rgba(2,10,26,.72) 100%);
+  transform:perspective(260px) rotateX(70deg);
+  transform-origin:bottom center;
+  -webkit-mask-image:linear-gradient(180deg, transparent 0%, #000 22%, #000 100%);
+          mask-image:linear-gradient(180deg, transparent 0%, #000 22%, #000 100%);
+  pointer-events:none;
+}
+
+@keyframes respira{
+  0%,100%{ opacity:.82; transform:scale(1) }
+  50%    { opacity:1;   transform:scale(1.05) }
+}
+@media (prefers-reduced-motion: reduce){ .gate:before{ animation:none } }
+
+/* la tarjeta y el crédito van encima de las capas */
+.gate > *{position:relative; z-index:2}
+/* Crédito del desarrollador bajo la tarjeta de acceso. */
+.credito{display:flex;align-items:center;justify-content:center;gap:9px;
+  margin-top:20px;color:rgba(255,255,255,.62);font-size:11px;line-height:1.35;text-align:left}
+.credito img{width:26px;height:auto;opacity:.82;flex:none}
+.credito b{color:rgba(255,255,255,.88);font-weight:700}
+
+.gate-card{
+  width:100%; max-width:400px; padding:32px 26px 28px;
+  background:linear-gradient(180deg,#fff 0%,#FBFDFF 100%);
+  border-radius:22px; border:1px solid rgba(255,255,255,.55);
+  box-shadow:0 26px 70px rgba(2,10,26,.48), 0 2px 0 rgba(255,255,255,.7) inset;
+}
 .gate-logo{height:88px;margin:0 auto 18px;width:auto}
-.gate h1{font-size:19px;font-weight:700;text-align:center;margin-bottom:4px}
+.gate h1{font-size:19px;font-weight:700;text-align:center;margin-bottom:4px;letter-spacing:-.01em}
 .gate p.sub{text-align:center;color:var(--slate);font-size:13px;margin-bottom:20px}
+/* una línea de luz bajo el logo, para separarlo del formulario sin meter otra caja */
+.gate-card .filo{height:1px;margin:0 auto 18px;max-width:180px;
+  background:linear-gradient(90deg,transparent,rgba(47,111,196,.35),transparent)}
 
 /* ---------- estructura ---------- */
 .app{display:none;min-height:100dvh;padding-bottom:78px}
@@ -236,10 +299,114 @@ textarea{min-height:84px;resize:vertical}
   box-shadow:0 1px 6px rgba(6,34,71,.18)}
 body.demo{padding-top:26px}
 body.demo header.top{top:26px}
+/* La leyenda del vencimiento no cabe en una línea en teléfono: que se encoja
+   en lugar de cortarse a la mitad de una palabra. */
+.cinta-demo{white-space:normal;line-height:1.3;padding:4px 10px;font-size:10.5px}
+@media (max-width:420px){ .cinta-demo{font-size:9.5px} }
 @media print{ .cinta-demo{display:none !important} }
 .pie-demo{display:none}
 body.demo .pie-demo{display:block;margin-top:10px;font-size:9px;color:#8A97A8;
   font-style:italic;text-align:center}
+
+/* ---------- distintivos de la licencia de demostración ----------
+   Van sobre CADA hoja impresa, no sólo en la pantalla: una propuesta salida de
+   una demostración tiene que verse como tal cuando el cliente final la reciba
+   impresa o por correo. El sello es la advertencia; el candado real es que el
+   servidor deja de contestar cuando vence la licencia. */
+body.demo #doc .hoja{position:relative}
+body.demo #doc .hoja:after{
+  content:attr(data-sello);
+  position:absolute;inset:0;z-index:50;pointer-events:none;
+  display:flex;align-items:center;justify-content:center;
+  font-size:58px;font-weight:800;letter-spacing:.18em;
+  color:rgba(19,70,138,.10);
+  transform:rotate(-32deg);text-align:center;line-height:1.25;white-space:pre-line}
+body.demo #doc .hoja.portada:after{font-size:64px}
+/* Banda superior en cada hoja, para que se lea aunque la impriman en blanco y negro. */
+body.demo #doc .hoja:before{
+  content:attr(data-cintilla);
+  position:absolute;top:0;left:0;right:0;z-index:51;
+  background:#13468A;color:#fff;font-size:8.5px;font-weight:700;
+  letter-spacing:.12em;text-transform:uppercase;text-align:center;padding:3px 0}
+
+.dato-fijo{margin-top:6px;padding:10px 12px;background:#F1F5F9;border-radius:var(--r);
+  font-size:14px;color:var(--navy);font-weight:600;line-height:1.4}
+
+.congelado{max-width:520px;margin:12vh auto;padding:28px 24px;text-align:center}
+.congelado h2{font-size:22px;color:var(--navy);margin-bottom:14px}
+.congelado p{font-size:14px;line-height:1.65;color:var(--slate);margin-bottom:14px;text-align:left}
+.congelado .btn{width:100%;margin-top:10px}
+body.congelada header.top,body.congelada #tabs{display:none}
+
+.hecho-por{display:flex;gap:13px;align-items:center}
+.hecho-por img{width:46px;height:auto;flex:none}
+.hecho-por b{display:block;font-size:13.5px;color:var(--navy)}
+.hecho-por span{display:block;font-size:11.5px;color:var(--slate);line-height:1.45;margin:2px 0 5px}
+.hecho-por a{font-size:12px;color:var(--azul);text-decoration:none;font-weight:600}
+
+#doc .firma-dev{display:flex;align-items:center;justify-content:center;gap:6px;
+  margin-top:16px;padding-top:11px;border-top:1px solid #E6EDF7;
+  font-size:7.5px;color:#9AA8BA;line-height:1.3;text-align:left}
+/* La tarjeta de monitoreo fija el ancho de sus imágenes en 1.5in; esta firma va
+   dentro de esa tarjeta, así que necesita un selector más específico o el logo
+   sale del tamaño de la pantalla del teléfono dibujada arriba. */
+#doc .monitoreo .tarjeta .firma-dev img{width:15px;height:auto;margin:0;opacity:.5;flex:none}
+#doc .firma-dev b{color:#7C8A9E;font-weight:600}
+
+.tabla-mini{width:100%;border-collapse:collapse;font-size:12.5px}
+.tabla-mini th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--slate);padding:0 0 7px;border-bottom:1px solid var(--line)}
+.tabla-mini th:not(:first-child),.tabla-mini td:not(:first-child){text-align:right}
+.tabla-mini td{padding:8px 0;border-bottom:1px solid var(--line);vertical-align:top}
+.tabla-mini td small{display:block;font-size:10.5px;color:var(--slate);font-weight:400}
+.tabla-mini .suma td{border-bottom:none;padding:3px 0;color:var(--slate)}
+.tabla-mini .tot td{font-weight:700;color:var(--navy);font-size:14px;padding-top:7px}
+
+/* ---------- orden de compra impresa ---------- */
+#doc .hoja.orden .oc-partes{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:16px 0 14px}
+#doc .hoja.orden .oc-partes .et{font-size:9px;font-weight:700;letter-spacing:.14em;
+  text-transform:uppercase;color:#7C8A9E;margin-bottom:5px}
+#doc .hoja.orden .oc-partes b{display:block;font-size:12.5px;color:#0A2A5E}
+#doc .hoja.orden .oc-partes span{display:block;font-size:10px;color:#5E6B7C;line-height:1.5}
+#doc .hoja.orden .oc-obra{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;
+  background:#F1F6FD;border-radius:8px;padding:11px 14px;margin-bottom:16px}
+#doc .hoja.orden .oc-obra span{display:block;font-size:9px;text-transform:uppercase;
+  letter-spacing:.08em;color:#7C8A9E}
+#doc .hoja.orden .oc-obra b{font-size:12px;color:#0A2A5E}
+#doc .hoja.orden .oc-tabla{width:100%;border-collapse:collapse;font-size:10.5px}
+#doc .hoja.orden .oc-tabla th{background:#13468A;color:#fff;text-align:left;padding:7px 9px;
+  font-size:9px;text-transform:uppercase;letter-spacing:.06em}
+#doc .hoja.orden .oc-tabla td{padding:8px 9px;border-bottom:1px solid #E6EDF7;vertical-align:top}
+#doc .hoja.orden .oc-tabla td.n{text-align:right;white-space:nowrap}
+#doc .hoja.orden .oc-tabla td small{display:block;color:#7C8A9E;font-size:9px;margin-top:2px}
+#doc .hoja.orden .oc-tabla tfoot td{border:none;padding:3px 9px;text-align:right;color:#5E6B7C}
+#doc .hoja.orden .oc-tabla tfoot .tot td{font-weight:700;color:#0A2A5E;font-size:12.5px;
+  border-top:1px solid #C9D8EE;padding-top:7px}
+#doc .hoja.orden .oc-notas{font-size:9.5px;color:#6b7280;line-height:1.55;margin-top:12px}
+
+/* ---------- ayuda en contexto ----------
+   El signo va pegado a la etiqueta del campo, no en una esquina: la duda nace
+   leyendo la etiqueta. Se ve discreto para no ensuciar el formulario, pero el
+   área que responde al dedo es de 24 px. */
+.pista{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:16px;height:16px;padding:0;margin-left:5px;vertical-align:-3px;
+  border:1.4px solid var(--sky,#2F6FC4);border-radius:50%;background:transparent;
+  color:var(--sky,#2F6FC4);font:700 10.5px/1 inherit;cursor:pointer;
+  position:relative;
+}
+.pista:before{content:"";position:absolute;inset:-5px}   /* área para el dedo */
+.pista:active{background:var(--sky,#2F6FC4);color:#fff}
+label.f > span .pista{text-transform:none;letter-spacing:0}
+h3 .pista{vertical-align:1px}
+@media print{ .pista{display:none} }
+
+.ayuda-texto{font-size:13.5px;line-height:1.65;color:var(--ink,#1F2937)}
+.ayuda-texto p{margin:0 0 11px}
+.ayuda-texto b{color:var(--navy)}
+.ayuda-pie{margin-top:14px;padding-top:11px;border-top:1px solid var(--line);
+  font-size:12px;color:var(--slate)}
+.ayuda-pie a{color:var(--sky,#2F6FC4);font-weight:600;text-decoration:none}
 
 /* ---------- clientes repetidos ---------- */
 .dupgrupo{border:1px solid var(--line);border-radius:var(--r);padding:12px;margin-bottom:14px;
@@ -369,6 +536,18 @@ label.f.destaca>span{color:var(--blue);font-weight:800}
   color:#3f8fda;border-bottom:2px solid #3f8fda;display:inline-block;padding-bottom:3px}
 #doc .portada .mv .tit{font-size:13px;font-weight:700;color:#0a3b7d;margin:9px 0 7px}
 #doc .portada .mv p{font-size:9.5px;line-height:1.65;color:#4b5563;text-align:justify}
+
+/* Portada sencilla: la que sale cuando la empresa todavía no sube foto de
+   portada ni captura misión y visión. Sin esto, el título quedaba arriba y la
+   hoja era un hueco blanco de dos tercios. El bloque se centra a lo alto y se
+   agrega una banda de color para que la hoja se vea intencional y no a medias. */
+#doc .portada.sencilla .arriba{
+  position:absolute;top:0;left:0;right:0;bottom:2.6in;
+  display:flex;flex-direction:column;justify-content:center;padding:.62in}
+#doc .portada.sencilla:before{content:"";position:absolute;left:0;right:0;top:0;height:.32in;
+  background:linear-gradient(90deg,#2F6FC4 0%,#13468A 100%)}
+#doc .portada.sencilla h1{font-size:36px}
+#doc .portada.sencilla .sub{font-size:24px}
 
 #doc .portada .caja{position:absolute;left:0;bottom:.72in;z-index:2;width:60%;
   background:linear-gradient(120deg,#2F6FC4 0%,#13468A 100%);color:#fff;

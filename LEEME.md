@@ -139,6 +139,206 @@ public/icons/                         íconos y logotipos
   cotizaciones ajenas aunque manipule la aplicación desde el navegador.
 - Los precios solo se pueden modificar con rol de administrador.
 
+## Datos de la empresa
+
+**Más → Datos de la empresa** guarda razón social, giro, WhatsApp, correo, sitio, zona de
+cobertura y logo. Es lo que sale impreso en las cotizaciones, en la hoja de contacto y en
+los vales de almacén. Antes estaba escrito dentro del código, así que toda instalación
+sacaba las propuestas con el nombre y el logo de Marcelestial.
+
+Reglas que conviene conocer antes de entregar una instalación a otra empresa:
+
+- Los valores de ejemplo (los de Marcelestial) **sólo aparecen mientras la instalación no
+  tenga capturada la razón social**. En cuanto la empresa guarda sus datos, un campo que
+  dejó vacío sale vacío: nunca se le presta el correo ni el logo de nadie más.
+- Si no sube logo, las hojas salen sin logo. No hereda el de otra empresa.
+- Sólo el administrador los cambia. La vendedora y el almacén los leen, porque los
+  necesitan para imprimir sus cotizaciones y sus vales.
+- El logo se guarda dentro de la base como imagen; no hay que subir archivos al servidor.
+
+La portada de la propuesta también se configura ahí: **foto de portada, misión y visión**.
+Vacías, esos bloques no se imprimen y la hoja usa un acomodo sencillo con el título centrado,
+en lugar de dejar dos tercios en blanco. Importa porque el texto de misión y visión que traía
+la aplicación es el de Marcelestial —habla de eólica y almacenamiento—, y ninguna otra empresa
+debería firmarlo.
+
+## Modo y licencia
+
+Son dos cosas distintas y conviene no mezclarlas:
+
+- **`MODO_DEMO = 1`** enciende los **distintivos**: marca de agua en cada hoja, cintilla,
+  topes de la versión de prueba y el botón de reiniciar datos.
+- **`LICENCIA_HASTA = AAAA-MM-DD`** es el **candado**, y vale para cualquier instalación, sea
+  o no demostración. Pasada esa fecha, el servidor deja de trabajar.
+- **`LICENCIA_SUSPENDIDA = 1`** apaga el acceso el mismo día, sin esperar a la fecha.
+
+| Variable | Ejemplo | Para qué |
+|---|---|---|
+| `MODO_DEMO` | `1` | Sellos, topes y botón de reinicio |
+| `LICENCIA_HASTA` | `2026-11-14` | Último día de servicio |
+| `LICENCIA_SUSPENDIDA` | `1` | Apagar hoy mismo |
+| `LICENCIA_GRACIA` | `7` | Días de tolerancia tras la fecha (0 en demo) |
+| `TOPE_USUARIOS` | `2` | Cuentas máximas (sólo en demo) |
+| `TOPE_COTIZACIONES` | `50` | Cotizaciones máximas (sólo en demo) |
+| `VENTAS_WHATSAPP` | `55 7657 4769` | Aparece en los avisos de tope y de bloqueo |
+
+Todas viven en la configuración de Netlify. Quien usa la aplicación es administrador de
+**su** instalación, pero no entra al panel de Netlify, así que no puede mover ninguna.
+
+Las tres combinaciones que se usan:
+
+| Caso | `MODO_DEMO` | `LICENCIA_HASTA` | Cómo se ve |
+|---|---|---|---|
+| Prueba de 30 días | `1` | fecha a 30 días | Con sellos y con topes |
+| Cliente que compra material | *(sin poner)* | fecha que se renueva | Limpia, sin sellos ni topes |
+| Marcelestial | *(sin poner)* | *(sin poner)* | Limpia y sin caducidad |
+
+El caso de en medio es el que resuelve «si algún día deja de comprar, apagarle el acceso»:
+se le pone una fecha corta y se renueva mientras siga comprando. El día que deje de hacerlo
+no hay que hacer nada — se apaga solo. Y si hay que apagarla antes, `LICENCIA_SUSPENDIDA`.
+
+**Renovación cada tres meses y días de gracia.** Una fecha que hay que mover a mano depende
+de que alguien se acuerde. Por eso una instalación de trabajo no se apaga de golpe: pasada la
+fecha entra en **gracia** —7 días por omisión— durante la cual sigue trabajando normal pero
+muestra un aviso con los días que faltan y el teléfono de contacto. Agotada la gracia, ahí sí
+se congela. En demostración la gracia es cero: la fecha es la fecha.
+
+Calendario de renovación del cliente que compra material:
+
+| Trimestre | `LICENCIA_HASTA` | Renovar antes del |
+|---|---|---|
+| 1 | `2026-12-15` | 15 de diciembre de 2026 |
+| 2 | `2027-03-15` | 15 de marzo de 2027 |
+| 3 | `2027-06-15` | 15 de junio de 2027 |
+| 4 | `2027-09-15` | 15 de septiembre de 2027 |
+
+Lo que trae encendida una demostración:
+
+- **Cintilla azul en cada hoja impresa** con la leyenda de documento de demostración y la
+  fecha de vigencia. Se imprime aunque salga en blanco y negro.
+- **Marca de agua diagonal** «DEMOSTRACIÓN · SIN VALIDEZ COMERCIAL» en todas las hojas,
+  cotizaciones y vales de almacén incluidos.
+- **Topes**: 2 cuentas y 50 cotizaciones, contados en el servidor. Al toparse, el aviso dice
+  qué pasó y a qué número escribir; lo ya capturado no se toca y se puede seguir imprimiendo.
+- **Tarjeta en Más** con lo que incluye la prueba y un botón de WhatsApp.
+- **Al vencer, el sitio queda congelado.** El cliente entra y ve una pantalla que explica
+  qué pasó; cotizar, consultar clientes y mover almacén responden 403. Nada se borra:
+  su información queda esperando a que se active la licencia y vuelve completa el mismo día.
+- **El respaldo sigue vivo aunque la licencia haya vencido o esté suspendida.** Es a
+  propósito: lo capturado es del cliente, no de quien le vendió la aplicación, y además ahí
+  hay datos personales de terceros.
+
+Sobre lo inamovible, conviene decirlo claro: el sello se dibuja en el navegador, así que
+alguien con conocimientos puede borrarlo de una hoja con las herramientas del navegador. Lo
+que no puede es seguir usando la aplicación después de la fecha, ni pasarse de los topes,
+porque eso lo decide el servidor. El sello es la advertencia; la fecha y los topes son el
+candado.
+
+### Entregar una instalación ya configurada
+
+Así se arma una demostración para un cliente, sin que nadie más conozca su contraseña:
+
+1. Sitio nuevo en Netlify desde este repositorio, con su propia base de datos y su propia
+   `JWT_SECRET`. Variables `MODO_DEMO = 1` y `DEMO_VENCE` con la fecha (30 días).
+2. Entrar y hacer la **configuración inicial** con una cuenta de instalador propia.
+3. Capturar en **Más → Datos de la empresa** la razón social, el logo, el contacto, la
+   portada y, si quieren, misión y visión. Ajustar tarifas y catálogo si hace falta.
+4. En **Usuarios**, dar de alta al dueño con su correo y rol Administrador, **dejando la
+   contraseña vacía**. Sale un enlace de invitación: se le manda por WhatsApp.
+5. Él abre el enlace, elige su contraseña y entra. La pantalla de acceso ya trae su logo y
+   su nombre, porque el servidor los manda antes de iniciar sesión.
+6. Cuando el cliente ya entró, **borrar la cuenta de instalador**. La app no deja quedarse
+   sin administrador, así que hay que hacerlo en este orden.
+
+El enlace vale **7 días** y sirve **una sola vez**. No se guarda en claro —en la base sólo
+queda su huella—, así que si se pierde no se puede recuperar: se usa **Volver a invitar** en
+la ficha de esa persona, que genera uno nuevo y anula el anterior. Ese mismo botón es lo que
+se usa cuando alguien olvida su contraseña.
+
+### Firma del desarrollador
+
+La aplicación lleva el crédito de quien la hizo, en tres lugares:
+
+- **Pantalla de acceso**: bajo la tarjeta, «Una aplicación de Comercializadora Marcelestial S.A.S.»
+- **Más**: una tarjeta con el logo, el giro y el WhatsApp de contacto.
+- **Última hoja de la propuesta**: un renglón chico al pie, con el logo a 15 px.
+
+En la aplicación el crédito se queda siempre. El del PDF se puede apagar por instalación con
+`CREDITO_PDF = 0` en Netlify, para el cliente que paga y prefiere que su propuesta no lleve la
+firma de nadie más. Vale la pena tenerlo presente: la propuesta se la entrega él a su propio
+cliente, y ahí la firma ajena puede incomodar. En una demostración conviene dejarla.
+
+### Respaldo
+
+**Más → Respaldo de tu información** descarga un archivo con clientes, cotizaciones,
+catálogo, movimientos, vales, seguimiento y configuración. Sólo el administrador.
+
+No lleva las contraseñas —no deben salir ni en un respaldo— ni las fotografías, porque son
+data URL de megabytes y reventarían el tamaño de respuesta de la función. En su lugar va,
+por renglón, si había foto o no. Las imágenes se conservan desde el botón de imprimir de
+cada cotización o vale.
+
+Sobre lo inamovible, conviene decirlo claro: el sello se dibuja en el navegador, así que
+alguien con conocimientos puede borrarlo de una hoja con las herramientas del navegador.
+Lo que no puede es seguir usando la aplicación después de la fecha, porque eso lo decide el
+servidor. El sello es la advertencia; la fecha es el candado.
+
+## Ayuda dentro de la aplicación
+
+Cada campo que se presta a duda lleva un **?** azul junto a su etiqueta: tarifa, número de
+servicio, tensión, consumo por horario, periodo, módulos a cotizar, precio por panel, estatus,
+hileras del arreglo, logo, usuarios y respaldo. Al tocarlo se abre una explicación corta con el
+WhatsApp de contacto al final.
+
+El texto vive en el objeto `AYUDA` dentro de `public/app.js`, no en un servidor: **en un techo
+sin señal la ayuda sigue estando**, porque el navegador ya guardó la aplicación completa.
+
+En **Más → Cómo se usa** está el índice de los 14 temas, para quien prefiere leer de corrido.
+Agregar un tema es un renglón más en `AYUDA` y un `${pista("clave")}` junto a la etiqueta.
+
+No hay recorrido guiado con flechas encima de la pantalla: estorba siempre y casi nadie lo
+termina.
+
+## Órdenes de compra de material
+
+Cuando el instalador marca una cotización como **Ganada**, en el editor aparece la tarjeta
+**Material de montaje**: calcula el riel y los clamps que lleva ese proyecto y genera una
+orden de compra al proveedor, con folio `OC-2026-0001` por año.
+
+### La regla de consumo
+
+Los puntos de sujeción interiores **los comparten dos paneles vecinos**: un riel con su clamp
+detiene el borde de un panel y el del siguiente. Por eso no son 4 piezas por panel.
+
+Por hilera de n paneles hay dos líneas de riel y cada una lleva n+1 posiciones:
+
+    piezas = 2 × paneles + 2 × hileras
+
+Un panel solo lleva 4 piezas; dos en línea llevan 6, no 8. Un proyecto de 51 paneles en 3
+hileras lleva 108 rieles y 108 clamps. Por eso la tarjeta pregunta **en cuántas hileras** van
+los paneles: sin ese dato el cálculo no puede salir bien.
+
+### El catálogo del proveedor
+
+Vive en `config` bajo la llave `material_proveedor`, no en el código. Cada producto lleva
+clave, nombre, detalle, unidad, `por_modulo`, `por_hilera` y sus escalones de precio por
+volumen. Hoy trae el riel mini (001) y el clamp (003) con los escalones de 200, 600 y más.
+
+Un producto con `por_modulo` y `por_hilera` en cero no se calcula solo: se captura a mano en
+la orden. Ahí entran la estructura, el cable FV y los interruptores de DC cuando estén en
+catálogo, **sin tocar código**.
+
+El escalón se cobra por la cantidad total del renglón. 108 piezas caen en el primero ($58 el
+riel); hay que pasar de 200 piezas para el segundo, o sea más de 99 paneles.
+
+### Candados
+
+- Una sola orden viva por cotización. Para rehacerla hay que cancelar la anterior, con motivo.
+- Las cantidades y los precios se calculan **en el servidor**: el precio del proveedor no se
+  negocia desde el navegador. Sólo se respetan los renglones agregados a mano.
+- El almacén no entra: una orden de compra no es un movimiento de existencias.
+- La orden se marca como enviada cuando se abre para imprimir o compartir.
+
 ## Seguridad de las sesiones
 
 - El token de sesión lleva escrita la **versión** de la cuenta (`usuarios.token_version`).

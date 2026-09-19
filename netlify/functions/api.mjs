@@ -3,18 +3,94 @@ import {
   sesion, esDueno, esAlmacen, esVendedor, mueveAlmacen, ROLES,
   num, limpio, siguienteFolio, ultimoFolio, conFolio, siguienteFolioVale,
   totalDePartidas, fotoValida, firmaValida, claveNombre, claveRpu,
+  nuevoCodigo, huellaDeCodigo, SIN_PASSWORD,
+  siguienteFolioOrden, materialDeProyecto,
 } from "../lib/core.mjs";
 
 /* Busca un cliente que ya exista con el mismo nombre (sin acentos ni signos) o
    con el mismo número de servicio. La comparación se hace en la aplicación y no
    en la consulta, porque la lista de clientes es chica y así se aprovecha la
    misma normalización que usa el buscador. */
-/* ¿Este sitio es el de demostración?
-   Se enciende con la variable MODO_DEMO = 1 en la configuración de Netlify,
-   NO en el código ni en la base de datos. Así el mismo código sirve para el
-   sitio de trabajo de Marcelestial y para el de demostración, y el sitio de
-   trabajo no puede volverse demostración por accidente. */
+/* ===================== MODO Y LICENCIA =====================
+   Son dos cosas distintas y conviene no confundirlas:
+
+   · MODO_DEMO enciende los DISTINTIVOS —marca de agua, cintilla, topes— y el
+     botón de reiniciar datos. Es para las instalaciones de prueba.
+   · LICENCIA_HASTA es el CANDADO, y aplica a cualquier instalación, sea o no
+     demostración. Vencida, el servidor deja de trabajar.
+
+   Así, un cliente que usa la aplicación en serio —porque nos compra material—
+   la tiene limpia, sin sellos y sin topes, pero con fecha. Se le renueva
+   mientras siga comprando; el día que deje de hacerlo, se deja de renovar y se
+   apaga solo. Y si hay que apagarla el mismo día, LICENCIA_SUSPENDIDA = 1.
+
+   Las tres viven en la configuración de Netlify, nunca en la base ni en el
+   código: el administrador de su instalación no las puede mover.
+
+   | Variable              | Ejemplo      | Para qué                          |
+   |-----------------------|--------------|-----------------------------------|
+   | MODO_DEMO             | 1            | Sellos, topes y reinicio          |
+   | LICENCIA_HASTA        | 2026-11-14   | Último día de servicio            |
+   | LICENCIA_SUSPENDIDA   | 1            | Apagar hoy mismo                  |
+   | TOPE_USUARIOS         | 2            | Cuentas máximas (sólo demo)       |
+   | TOPE_COTIZACIONES     | 50           | Cotizaciones máximas (sólo demo)  |
+   | LICENCIA_GRACIA       | 7            | Días de tolerancia tras la fecha  |
+   | CREDITO_PDF           | 0            | Quita la firma del desarrollador  |
+   | VENTAS_WHATSAPP       | 55 7657 4769 | A quién le escriben para activar  |
+
+   La gracia existe por una razón práctica: una licencia que se renueva cada
+   tres meses depende de que alguien se acuerde de moverla. Si se pasa la fecha,
+   la aplicación NO se apaga de golpe; avisa durante los días de gracia y hasta
+   entonces se congela. Así un cliente bueno no se queda tirado un lunes por un
+   descuido. En demostración la gracia es 0: ahí la fecha es la fecha.
+*/
 const esDemostracion = () => String(process.env.MODO_DEMO || "") === "1";
+
+const num0 = (v, omision) => {
+  const n = Number(String(v || "").trim());
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : omision;
+};
+/* Los topes sólo existen en demostración. Una instalación de trabajo no lleva. */
+const topes = () => esDemostracion()
+  ? { usuarios: num0(process.env.TOPE_USUARIOS, 2),
+      cotizaciones: num0(process.env.TOPE_COTIZACIONES, 50) }
+  : { usuarios: 0, cotizaciones: 0 };
+
+const contactoVentas = () => String(process.env.VENTAS_WHATSAPP || "").trim();
+
+function licencia() {
+  const demo = esDemostracion();
+  const tope = topes();
+  const contacto = contactoVentas();
+  /* DEMO_VENCE se sigue leyendo para no romper las instalaciones que ya la
+     tienen puesta; LICENCIA_HASTA es la que manda. */
+  const texto = String(process.env.LICENCIA_HASTA || process.env.DEMO_VENCE || "").trim();
+  const suspendida = String(process.env.LICENCIA_SUSPENDIDA || "") === "1";
+  /* La firma «desarrollado por» se imprime en la última hoja de la propuesta.
+     Se puede apagar por instalación con CREDITO_PDF = 0, para el cliente que
+     paga y no quiere la firma de nadie más en el documento que le entrega a su
+     propio cliente. En la aplicación el crédito se queda siempre. */
+  const creditoPdf = String(process.env.CREDITO_PDF || "1") !== "0";
+  const base = { demo, vence: null, topes: tope, contacto, suspendida, creditoPdf };
+
+  if (suspendida) return { ...base, vencida: true, motivo: "suspendida" };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(texto)) return base;   /* sin fecha: no caduca */
+
+  /* Vence al terminar ese día, hora del centro de México. */
+  const limite = new Date(texto + "T23:59:59-06:00");
+  const gracia = demo ? 0 : num0(process.env.LICENCIA_GRACIA, 7);
+  const corte = limite.getTime() + gracia * 86400000;
+  const pasada = Date.now() > limite.getTime();
+  const vencida = Date.now() > corte;
+  return {
+    ...base, vence: texto, gracia,
+    dias: Math.ceil((limite.getTime() - Date.now()) / 86400000),
+    /* En gracia: sigue trabajando, pero avisando. */
+    enGracia: pasada && !vencida,
+    diasDeGracia: pasada && !vencida ? Math.ceil((corte - Date.now()) / 86400000) : 0,
+    vencida, motivo: vencida ? "vencida" : null,
+  };
+}
 
 /* Texto listo para comparar: sin acentos y en minúsculas, igual que hace la
    app en el teléfono, para que buscar «plasticos» encuentre «PLÁSTICOS». */
@@ -173,10 +249,73 @@ export default async (req) => {
     const sinLlave = problemaDeLlave();
     if (sinLlave) return err(sinLlave, 500);
 
+    /* Licencia de demostración vencida: el servidor deja de trabajar. Sólo
+       quedan vivas las rutas que permiten ver el aviso y cerrar sesión. Éste es
+       el candado de verdad; el sello impreso es sólo la advertencia visible. */
+    /* «respaldo» sigue vivo con la licencia vencida a propósito: la información
+       capturada es del cliente, no nuestra, y se le entrega aunque no haya
+       pagado. Lo que se congela es la aplicación, no sus datos. */
+    const lic = licencia();
+    if (lic.vencida && !["estado", "yo", "login", "respaldo"].includes(ruta))
+      return err(
+        (lic.motivo === "suspendida"
+          ? "El acceso a esta aplicación está suspendido."
+          : (lic.demo ? "La demostración terminó el " : "La licencia venció el ") + lic.vence + ".") +
+        " Tu información está guardada y vuelve completa al activarla." +
+        (lic.contacto ? " Escríbenos al " + lic.contacto + "." : ""), 403);
+
     /* ============ ARRANQUE / SESIÓN ============ */
     if (ruta === "estado" && metodo === "GET") {
       const [r] = await db.sql`SELECT COUNT(*)::int AS n FROM usuarios`;
-      return json({ instalado: (r?.n || 0) > 0, demo: esDemostracion() });
+      /* La marca va aquí, antes de iniciar sesión: la pantalla de acceso tiene
+         que traer el logo y el nombre de la empresa dueña de la instalación, no
+         los de quien programó la aplicación. Son datos públicos de todos modos:
+         están impresos en cada cotización que mandan. */
+      const [e] = await db.sql`SELECT valor FROM config WHERE clave = 'empresa'`;
+      const emp = e?.valor || {};
+      return json({
+        instalado: (r?.n || 0) > 0, demo: esDemostracion(), licencia: licencia(),
+        marca: { razon_social: emp.razon_social || "", logo: emp.logo || "" },
+      });
+    }
+
+    /* ============ ACTIVACIÓN POR INVITACIÓN ============
+       Sin sesión a propósito: es justo lo que hace quien todavía no tiene
+       contraseña. El código viaja en el enlace y sólo sirve una vez. */
+    if (ruta === "activacion" && metodo === "GET") {
+      const codigo = String(url.searchParams.get("codigo") || "");
+      if (!codigo) return err("Falta el código de la invitación.", 400);
+      const [u] = await db.sql`
+        SELECT nombre, correo, rol, activacion_vence FROM usuarios
+         WHERE activacion_hash = ${huellaDeCodigo(codigo)} AND activo = TRUE LIMIT 1`;
+      if (!u) return err("Esta invitación ya se usó o no es válida. Pide una nueva.", 404);
+      if (u.activacion_vence && new Date(u.activacion_vence) < new Date())
+        return err("Esta invitación venció. Pide una nueva a quien te dio de alta.", 410);
+      return json({ nombre: u.nombre, correo: u.correo, rol: u.rol });
+    }
+
+    if (ruta === "activar" && metodo === "POST") {
+      const codigo = String(cuerpo.codigo || "");
+      const nueva = String(cuerpo.password || "");
+      if (nueva.length < 8) return err("La contraseña debe tener al menos 8 caracteres.");
+      const [u] = await db.sql`
+        SELECT id, correo, nombre, rol, activacion_vence FROM usuarios
+         WHERE activacion_hash = ${huellaDeCodigo(codigo)} AND activo = TRUE LIMIT 1`;
+      if (!u) return err("Esta invitación ya se usó o no es válida. Pide una nueva.", 404);
+      if (u.activacion_vence && new Date(u.activacion_vence) < new Date())
+        return err("Esta invitación venció. Pide una nueva a quien te dio de alta.", 410);
+      /* Se quema el código en la misma operación que guarda la contraseña: no
+         queda forma de volver a usar el enlace. */
+      const [act] = await db.sql`
+        UPDATE usuarios SET password_hash = ${hashPassword(nueva)},
+                            activacion_hash = NULL, activacion_vence = NULL,
+                            intentos_fallidos = 0, bloqueado_hasta = NULL,
+                            token_version = token_version + 1
+         WHERE id = ${u.id} RETURNING token_version`;
+      return json({
+        token: signToken({ uid: u.id, tv: act.token_version }),
+        usuario: { id: u.id, correo: u.correo, nombre: u.nombre, rol: u.rol },
+      });
     }
 
     if (ruta === "setup" && metodo === "POST") {
@@ -201,6 +340,12 @@ export default async (req) => {
       const MAX_INTENTOS = 5, MINUTOS_BLOQUEO = 15;
       const correo = limpio(cuerpo.correo, 120)?.toLowerCase();
       const [u] = await db.sql`SELECT * FROM usuarios WHERE correo = ${correo} LIMIT 1`;
+
+      /* Cuenta invitada que todavía no estrena contraseña: decirlo, en vez de
+         dejar a la persona probando contraseñas que nunca van a servir. */
+      if (u?.activacion_hash)
+        return err("Esta cuenta todavía no tiene contraseña. Abre el enlace de invitación " +
+                   "que te enviaron para elegir la tuya.", 403);
 
       if (u?.bloqueado_hasta && new Date(u.bloqueado_hasta) > new Date()) {
         const faltan = Math.max(1, Math.ceil((new Date(u.bloqueado_hasta) - new Date()) / 60000));
@@ -238,7 +383,166 @@ export default async (req) => {
     const yo = await sesion(req);
     if (!yo) return err("Sesión no válida. Vuelve a iniciar sesión.", 401);
 
-    if (ruta === "yo" && metodo === "GET") return json({ usuario: yo });
+    if (ruta === "yo" && metodo === "GET") return json({ usuario: yo, licencia: licencia() });
+
+    /* ============ ÓRDENES DE COMPRA DE MATERIAL ============
+       Material de montaje que lleva un proyecto, pedido al proveedor. El
+       almacén no entra aquí: es una compra, no un movimiento de existencias. */
+    if (ruta === "material" && metodo === "GET") {
+      if (esAlmacen(yo)) return err("Esta sección no corresponde al almacén.", 403);
+      const [c] = await db.sql`SELECT valor FROM config WHERE clave = 'material_proveedor'`;
+      const cat = c?.valor || {};
+      const modulos = num(url.searchParams.get("modulos")) || 0;
+      const hileras = num(url.searchParams.get("hileras")) || 1;
+      return json({ catalogo: cat, partidas: materialDeProyecto(cat, modulos, hileras),
+                    modulos, hileras });
+    }
+
+    if (ruta === "ordenes") {
+      if (esAlmacen(yo)) return err("Esta sección no corresponde al almacén.", 403);
+
+      if (metodo === "GET") {
+        const filas = await db.sql`
+          SELECT o.*, c.nombre AS cliente, q.folio AS cotizacion_folio, u.nombre AS usuario
+            FROM ordenes o
+            LEFT JOIN clientes c     ON c.id = o.cliente_id
+            LEFT JOIN cotizaciones q ON q.id = o.cotizacion_id
+            LEFT JOIN usuarios u     ON u.id = o.usuario_id
+           ORDER BY o.creado_en DESC LIMIT 200`;
+        return json({ ordenes: filas });
+      }
+
+      if (metodo === "POST") {
+        const idCot = num(cuerpo.cotizacion_id);
+        if (!idCot) return err("Falta la cotización de la que sale la orden.");
+        const [cot] = await db.sql`SELECT * FROM cotizaciones WHERE id = ${idCot} LIMIT 1`;
+        if (!cot) return err("No se encontró esa cotización.", 404);
+
+        /* Se permite una sola orden viva por cotización: dos pedidos del mismo
+           proyecto casi siempre son un doble clic, no una segunda compra. */
+        const [ya] = await db.sql`
+          SELECT folio FROM ordenes WHERE cotizacion_id = ${idCot} AND cancelado_en IS NULL LIMIT 1`;
+        if (ya) return err(`Esta cotización ya tiene la orden ${ya.folio}. Cancélala si quieres rehacerla.`, 409);
+
+        const [c] = await db.sql`SELECT valor FROM config WHERE clave = 'material_proveedor'`;
+        const cat = c?.valor || {};
+        const modulos = num(cuerpo.modulos) || num(cot.tecnico?.paneles) || 0;
+        if (!modulos) return err("La cotización no tiene número de módulos; captúralo en la orden.");
+
+        /* Las cantidades se calculan aquí, en el servidor, aunque el teléfono ya
+           las haya mostrado: el precio del proveedor no se negocia desde el
+           navegador. Sólo se respetan los renglones agregados a mano. */
+        const hileras = Math.max(1, num(cuerpo.hileras) || 1);
+        const partidas = materialDeProyecto(cat, modulos, hileras);
+        for (const extra of Array.isArray(cuerpo.extras) ? cuerpo.extras.slice(0, 30) : []) {
+          const nombre = limpio(extra.nombre, 120);
+          const cantidad = Math.max(0, Number(extra.cantidad) || 0);
+          const precio = Math.max(0, Number(extra.precio) || 0);
+          if (!nombre || !cantidad) continue;
+          partidas.push({ clave: limpio(extra.clave, 20) || "—", nombre,
+            detalle: limpio(extra.detalle, 200) || "", unidad: limpio(extra.unidad, 10) || "pza",
+            por_modulo: 0, cantidad, precio, importe: +(cantidad * precio).toFixed(2) });
+        }
+        if (!partidas.length) return err("La orden quedó sin renglones.");
+
+        const subtotal = +partidas.reduce((a, p) => a + p.importe, 0).toFixed(2);
+        const iva = +(subtotal * (Number(cat.iva) || 0)).toFixed(2);
+        const total = +(subtotal + iva).toFixed(2);
+
+        const orden = await conFolio(async (folio) => {
+          const [o] = await db.sql`
+            INSERT INTO ordenes (folio, cotizacion_id, cliente_id, obra, modulos, hileras, partidas,
+                                 subtotal, iva, total, notas, usuario_id)
+            VALUES (${folio}, ${idCot}, ${cot.cliente_id}, ${limpio(cuerpo.obra, 160)},
+                    ${modulos}, ${hileras}, ${JSON.stringify(partidas)}::jsonb,
+                    ${subtotal}, ${iva}, ${total}, ${limpio(cuerpo.notas, 500)}, ${yo.id})
+            RETURNING *`;
+          return o;
+        }, 8, siguienteFolioOrden);
+        return json({ orden, catalogo: cat }, 201);
+      }
+    }
+
+    if (ruta.startsWith("orden/")) {
+      if (esAlmacen(yo)) return err("Esta sección no corresponde al almacén.", 403);
+      const partes = ruta.split("/");
+      const id = num(partes[1]);
+      if (!id) return err("Orden no válida.");
+
+      if (partes[2] === "cancelar" && metodo === "POST") {
+        const motivo = limpio(cuerpo.motivo, 300);
+        if (!motivo) return err("Escribe por qué se cancela la orden.");
+        const [o] = await db.sql`
+          UPDATE ordenes SET cancelado_en = NOW(), cancelado_por = ${yo.id}, cancelado_motivo = ${motivo}
+           WHERE id = ${id} AND cancelado_en IS NULL RETURNING *`;
+        if (!o) return err("Esa orden no existe o ya estaba cancelada.", 404);
+        return json({ orden: o });
+      }
+
+      if (partes[2] === "enviada" && metodo === "POST") {
+        const [o] = await db.sql`
+          UPDATE ordenes SET enviada_en = NOW() WHERE id = ${id} AND cancelado_en IS NULL RETURNING *`;
+        if (!o) return err("Esa orden no existe o está cancelada.", 404);
+        return json({ orden: o });
+      }
+
+      if (metodo === "GET") {
+        const [o] = await db.sql`
+          SELECT o.*, c.nombre AS cliente, c.direccion AS cliente_direccion,
+                 q.folio AS cotizacion_folio, u.nombre AS usuario
+            FROM ordenes o
+            LEFT JOIN clientes c     ON c.id = o.cliente_id
+            LEFT JOIN cotizaciones q ON q.id = o.cotizacion_id
+            LEFT JOIN usuarios u     ON u.id = o.usuario_id
+           WHERE o.id = ${id} LIMIT 1`;
+        if (!o) return err("No se encontró la orden.", 404);
+        const [c] = await db.sql`SELECT valor FROM config WHERE clave = 'material_proveedor'`;
+        return json({ orden: o, catalogo: c?.valor || {} });
+      }
+    }
+
+    /* ============ RESPALDO ============
+       Todo lo capturado, en un solo archivo que el administrador se descarga.
+       Funciona también con la licencia vencida. No lleva las contraseñas ni las
+       fotografías: las contraseñas porque no deben salir de aquí ni en un
+       respaldo, y las fotos porque son data URL de megabytes y reventarían el
+       tamaño de respuesta; en su lugar va la cuenta de las que hay, para saber
+       qué se quedó pendiente de recuperar. */
+    if (ruta === "respaldo" && metodo === "GET") {
+      if (!esDueno(yo)) return err("Sólo el administrador puede descargar el respaldo.", 403);
+      const sinFotos = (fila, campos) => {
+        const c = { ...fila };
+        for (const k of campos) { c[k + "_hay"] = !!c[k]; delete c[k]; }
+        return c;
+      };
+      const [usuarios, clientes, cotizaciones, catalogo, movimientos, vales, seguimiento, conf] =
+        await Promise.all([
+          db.sql`SELECT id, nombre, correo, rol, telefono, activo, creado_en FROM usuarios ORDER BY id`,
+          db.sql`SELECT * FROM clientes ORDER BY id`,
+          db.sql`SELECT * FROM cotizaciones ORDER BY id`,
+          db.sql`SELECT * FROM catalogo ORDER BY id`,
+          db.sql`SELECT * FROM movimientos ORDER BY id`,
+          db.sql`SELECT * FROM vales ORDER BY id`,
+          db.sql`SELECT * FROM seguimiento ORDER BY id`,
+          db.sql`SELECT clave, valor FROM config`,
+        ]);
+      return json({
+        generado_en: new Date().toISOString(),
+        generado_por: yo.correo,
+        licencia: lic,
+        aviso: "Las contraseñas y las imágenes no se incluyen. Las imágenes se descargan " +
+               "desde cada cotización o vale, con el botón de imprimir.",
+        usuarios,
+        clientes,
+        cotizaciones: cotizaciones.map((c) =>
+          sinFotos(c, ["recibo_foto", "foto_producto", "foto_sitio"])),
+        catalogo,
+        movimientos,
+        vales: vales.map((v) => sinFotos(v, ["recibio_firma"])),
+        seguimiento,
+        config: Object.fromEntries(conf.map((f) => [f.clave, f.valor])),
+      });
+    }
 
     if (ruta === "cambiar-password" && metodo === "POST") {
       const nueva = String(cuerpo.nueva || "");
@@ -287,22 +591,55 @@ export default async (req) => {
         const correo = limpio(cuerpo.correo, 120)?.toLowerCase();
         const nombre = limpio(cuerpo.nombre, 120);
         const pass = String(cuerpo.password || "");
-        if (!correo || !nombre || pass.length < 8)
-          return err("Correo, nombre y contraseña de al menos 8 caracteres son obligatorios.");
+        /* Dos formas de dar de alta: invitando —la cuenta nace sin contraseña y
+           quien la reciba elige la suya— o poniéndosela nosotros. Lo primero es
+           lo normal; lo segundo queda para cuando alguien no tiene correo. */
+        const invitar = cuerpo.invitar !== false && !pass;
+        if (!correo || !nombre) return err("El correo y el nombre son obligatorios.");
+        if (!invitar && pass.length < 8)
+          return err("La contraseña debe tener al menos 8 caracteres.");
         const existe = await db.sql`SELECT id FROM usuarios WHERE correo = ${correo}`;
         if (existe.length) return err("Ya existe un usuario con ese correo.", 409);
+        /* Tope de la versión de prueba. Se cuenta aquí, en el servidor: no hay
+           forma de saltárselo desde el teléfono. */
+        const tope = topes();
+        if (tope.usuarios) {
+          const [c] = await db.sql`SELECT COUNT(*)::int AS n FROM usuarios WHERE activo = TRUE`;
+          if ((c?.n || 0) >= tope.usuarios)
+            return err(`La versión de prueba trabaja con ${tope.usuarios} cuentas y ya están ` +
+                       `ocupadas. En la versión completa no hay límite.` +
+                       (contactoVentas() ? ` Escríbenos al ${contactoVentas()}.` : ""), 402);
+        }
         const rol = ROLES.includes(cuerpo.rol) ? cuerpo.rol : "vendedor";
+        const codigo = invitar ? nuevoCodigo() : null;
         const [u] = await db.sql`
-          INSERT INTO usuarios (correo, nombre, rol, telefono, password_hash)
-          VALUES (${correo}, ${nombre}, ${rol},
-                  ${limpio(cuerpo.telefono, 40)}, ${hashPassword(pass)})
+          INSERT INTO usuarios (correo, nombre, rol, telefono, password_hash,
+                                activacion_hash, activacion_vence)
+          VALUES (${correo}, ${nombre}, ${rol}, ${limpio(cuerpo.telefono, 40)},
+                  ${invitar ? SIN_PASSWORD : hashPassword(pass)},
+                  ${invitar ? huellaDeCodigo(codigo) : null},
+                  ${invitar ? new Date(Date.now() + 7 * 86400000).toISOString() : null})
           RETURNING id, correo, nombre, rol, telefono, activo`;
-        return json({ usuario: u }, 201);
+        return json({ usuario: u, invitacion: codigo }, 201);
       }
       if (metodo === "PATCH") {
         const id = num(cuerpo.id);
         if (id === yo.id && cuerpo.activo === false)
           return err("No puedes desactivar tu propia cuenta.");
+        /* Volver a invitar: sirve cuando el enlace se venció o se perdió. Anula
+           el anterior, porque genera un código nuevo. */
+        if (cuerpo.reinvitar) {
+          const codigo = nuevoCodigo();
+          const [u] = await db.sql`
+            UPDATE usuarios SET password_hash = ${SIN_PASSWORD},
+                                activacion_hash = ${huellaDeCodigo(codigo)},
+                                activacion_vence = ${new Date(Date.now() + 7 * 86400000).toISOString()},
+                                intentos_fallidos = 0, bloqueado_hasta = NULL,
+                                token_version = token_version + 1
+            WHERE id = ${id} RETURNING id, correo, nombre`;
+          if (!u) return err("No se encontró esa cuenta.", 404);
+          return json({ usuario: u, invitacion: codigo });
+        }
         if (cuerpo.password) {
           if (String(cuerpo.password).length < 8) return err("Contraseña demasiado corta.");
           /* Cambiar la contraseña también levanta el bloqueo por intentos fallidos. */
@@ -953,7 +1290,12 @@ export default async (req) => {
     /* ============ PARÁMETROS DEL COTIZADOR RÁPIDO ============ */
     if (ruta === "config") {
       if (metodo === "GET") {
-        if (esAlmacen(yo)) return json({ config: {} });     /* son parámetros de precio */
+        /* El almacén no ve parámetros de precio, pero sí necesita los datos de
+           la empresa: son los que salen impresos en sus vales. */
+        if (esAlmacen(yo)) {
+          const [e] = await db.sql`SELECT valor FROM config WHERE clave = 'empresa'`;
+          return json({ config: e ? { empresa: e.valor } : {} });
+        }
         const filas = await db.sql`SELECT clave, valor FROM config`;
         return json({ config: Object.fromEntries(filas.map((f) => [f.clave, f.valor])) });
       }
@@ -961,6 +1303,44 @@ export default async (req) => {
       if (metodo === "PATCH") {
         const clave = limpio(cuerpo.clave, 60);
         if (!clave) return err("Falta la clave de configuración.");
+        /* Los datos de la empresa se recortan y el logo se valida como imagen,
+           para que nadie meta un texto de kilómetros ni un archivo que no sea
+           una imagen en el encabezado de todas las cotizaciones. */
+        if (clave === "empresa") {
+          const v = cuerpo.valor || {};
+          /* Una imagen de marca puede ser una que la empresa subió (data URL) o
+             un archivo del propio proyecto, como el logo que trae la instalación
+             de origen. Se acepta la ruta relativa, nunca una dirección externa:
+             eso evitaría meter una imagen de otro servidor en el encabezado de
+             todas las cotizaciones. */
+          const RUTA_PROPIA = /^\/[A-Za-z0-9/_-]+\.(png|jpe?g|webp|svg)$/i;
+          const imagenValida = (x) => RUTA_PROPIA.test(x) || fotoValida(x);
+          const razon = limpio(v.razon_social, 160);
+          if (!razon) return err("La razón social no puede quedar vacía: es lo que firma la cotización.");
+          const logo = String(v.logo || "").trim();
+          if (logo && !imagenValida(logo)) return err("El logo debe ser una imagen PNG, JPG o WebP.");
+          const portada = String(v.portada || "").trim();
+          if (portada && !imagenValida(portada)) return err("La foto de portada debe ser una imagen PNG, JPG o WebP.");
+          const valor = {
+            razon_social: razon,
+            giro:      limpio(v.giro, 160)      || "",
+            whatsapp:  limpio(v.whatsapp, 60)   || "",
+            correo:    limpio(v.correo, 120)    || "",
+            web:       limpio(v.web, 120)       || "",
+            cobertura: limpio(v.cobertura, 120) || "",
+            titulo_propuesta: limpio(v.titulo_propuesta, 120) || "",
+            logo:      logo || "",
+            portada:   portada || "",
+            mision_titulo: limpio(v.mision_titulo, 120)  || "",
+            mision_texto:  limpio(v.mision_texto, 1200)  || "",
+            vision_titulo: limpio(v.vision_titulo, 120)  || "",
+            vision_texto:  limpio(v.vision_texto, 1200)  || "",
+          };
+          await db.sql`
+            INSERT INTO config (clave, valor) VALUES ('empresa', ${JSON.stringify(valor)}::jsonb)
+            ON CONFLICT (clave) DO UPDATE SET valor = EXCLUDED.valor, actualizado_en = NOW()`;
+          return json({ ok: true });
+        }
         await db.sql`
           INSERT INTO config (clave, valor) VALUES (${clave}, ${JSON.stringify(cuerpo.valor || {})}::jsonb)
           ON CONFLICT (clave) DO UPDATE SET valor = EXCLUDED.valor, actualizado_en = NOW()`;
@@ -1057,6 +1437,17 @@ export default async (req) => {
         });
       }
       if (metodo === "POST") {
+        /* Tope de cotizaciones de la versión de prueba. Se revisa antes de
+           escribir, y no borra nada: las que ya hizo siguen ahí. */
+        const tope = topes();
+        if (tope.cotizaciones) {
+          const [c0] = await db.sql`SELECT COUNT(*)::int AS n FROM cotizaciones`;
+          if ((c0?.n || 0) >= tope.cotizaciones)
+            return err(`La versión de prueba llega a ${tope.cotizaciones} cotizaciones y ya las ` +
+                       `hiciste todas. Las que ya tienes se conservan y se pueden imprimir; ` +
+                       `para seguir cotizando hay que activar la versión completa.` +
+                       (contactoVentas() ? ` Escríbenos al ${contactoVentas()}.` : ""), 402);
+        }
         const partidas = Array.isArray(cuerpo.partidas) ? cuerpo.partidas : [];
         const c = await conFolio(async (folio) => {
           const [fila] = await db.sql`
