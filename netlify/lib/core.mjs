@@ -259,6 +259,69 @@ export function totalDePartidas(partidas) {
   );
 }
 
+/* ---------------- precios autorizados ----------------
+   La regla «sólo el administrador cambia precios» tiene que cumplirse en el
+   servidor, no en la pantalla: un vendedor puede mandar por la API el precio
+   que quiera aunque el campo esté deshabilitado en su teléfono.
+
+   Para cada partida se determina de dónde sale su precio autorizado:
+     SISTEMA-FV   → tabla de tarifas, por tarifa, tensión y cantidad de módulos
+     INVERSOR     → guía de inversores o precio del cotizador rápido
+     PANEL, ESTRUCT, MATELEC, MANOBRA → parámetros del cotizador rápido
+     cualquier otra clave → catálogo
+   Devuelve { ok } o { ok:false, mensaje }. El administrador nunca pasa por aquí. */
+export function revisarPrecios(partidas, tecnico, config, catalogo) {
+  const lista = Array.isArray(partidas) ? partidas : [];
+  const tarifas = config.tarifas?.lista || [];
+  const rapido = config.rapido_fotovoltaico || {};
+  const guia = config.dimensionamiento?.guia_inversores || [];
+  const porClave = new Map((catalogo || []).map((c) => [String(c.clave).toUpperCase(), Number(c.precio)]));
+  const cerca = (a, b) => Math.abs(Number(a) - Number(b)) <= 0.5;
+
+  for (const p of lista) {
+    const clave = String(p.clave || "").toUpperCase();
+    const precio = Number(p.precio) || 0;
+    const cant = Number(p.cantidad) || 0;
+
+    if (clave === "SISTEMA-FV") {
+      const tar = tarifas.find((t) => t.clave === tecnico?.tarifa);
+      if (!tar) return { ok: false, mensaje: "La cotización no indica la tarifa; no se puede validar el precio por módulo." };
+      const esc = (tar.escalones || [])
+        .filter((e) => e.tension === String(tecnico?.tension) || e.tension === "*")
+        .sort((a, b) => Number(a.hasta) - Number(b.hasta));
+      if (!esc.length) return { ok: false, mensaje: "La tarifa no tiene precio para esa tensión." };
+      const tope = Number(esc[esc.length - 1].hasta);
+      if (cant > tope) continue;                       /* arriba del tope no hay precio de tabla */
+      const m = esc.find((e) => cant <= Number(e.hasta)) || esc[esc.length - 1];
+      if (!cerca(precio, m.precio))
+        return { ok: false, mensaje: `El precio por módulo (${precio}) no coincide con la tarifa (${Number(m.precio)}). Sólo el administrador puede cambiarlo.` };
+      continue;
+    }
+
+    if (clave === "INVERSOR") {
+      const permitidos = [Number(rapido.inversor_precio) || 0, ...guia.map((g) => Number(g.precio) || 0)];
+      if (!permitidos.some((x) => cerca(precio, x)))
+        return { ok: false, mensaje: `El precio del inversor (${precio}) no está en la guía. Sólo el administrador puede cambiarlo.` };
+      continue;
+    }
+
+    const rapidas = { PANEL: "panel_precio", ESTRUCT: "estructura_por_panel",
+                      MATELEC: "electrico_por_kwp", MANOBRA: "manobra_por_kwp" };
+    if (rapidas[clave]) {
+      const aut = Number(rapido[rapidas[clave]]) || 0;
+      if (!cerca(precio, aut))
+        return { ok: false, mensaje: `El precio de ${clave} (${precio}) no coincide con el configurado (${aut}). Sólo el administrador puede cambiarlo.` };
+      continue;
+    }
+
+    if (!porClave.has(clave))
+      return { ok: false, mensaje: `«${p.descripcion || clave}» no está en el catálogo. Sólo el administrador puede agregar conceptos fuera de él.` };
+    if (!cerca(precio, porClave.get(clave)))
+      return { ok: false, mensaje: `El precio de ${clave} (${precio}) no coincide con el catálogo (${porClave.get(clave)}). Sólo el administrador puede cambiarlo.` };
+  }
+  return { ok: true };
+}
+
 /* Foto del recibo: sólo se acepta una imagen en formato data URL y con un tamaño
    razonable. Cualquier otra cosa se descarta, para que nadie meta basura en la
    base de datos. Alrededor de 4 MB de texto equivalen a 3 MB de imagen. */

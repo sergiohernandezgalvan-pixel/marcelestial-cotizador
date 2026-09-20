@@ -67,6 +67,21 @@ de lo que podría.
 
 ---
 
+## 2b. Corregido tras una segunda revisión externa (versión 2026.09.20)
+
+Una revisión independiente del código encontró seis puntos. Cuatro eran ciertos y se
+corrigieron; dos eran decisiones de diseño que se dejan documentadas.
+
+| Punto | Veredicto | Qué se hizo |
+|---|---|---|
+| El servidor aceptaba cualquier precio en las partidas | **Cierto y grave** | `revisarPrecios` en `core.mjs`: para quien no es administrador, cada partida se contrasta con la tarifa (SISTEMA-FV), la guía de inversores, el cotizador rápido o el catálogo. Precio distinto o concepto fuera de catálogo → 403. El administrador pasa directo. |
+| Cualquier vendedor podía cancelar la orden de otro; el almacén podía cotizar por la API | **Cierto** | Cancelar y marcar enviada: sólo administrador o quien la generó. El almacén queda bloqueado en crear y editar cotizaciones. |
+| El vale no se guardaba en una sola transacción | **Cierto** | Migración 021: `registrar_vale` y `cancelar_vale` son funciones de Postgres. Todo el vale ocurre en una transacción; la cancelación bloquea la fila (`FOR UPDATE`) contra dobles cancelaciones simultáneas. |
+| La tabla de recuperación decía "recuperada" a los 120 meses aunque quedara saldo | **Cierto** | Si queda saldo dice "más de 120 meses" y el párrafo avisa que conviene revisar dimensionamiento o precio. |
+| La orden se marcaba "enviada" al abrirla | **Cierto** | Ya no. Botón explícito "Ya la envié al proveedor". |
+| El respaldo no incluía órdenes ni permite restaurar | **Cierto a medias** | Las órdenes ya van. Fotos y firmas siguen fuera a propósito (límite de respuesta de la función). Restaurar desde el archivo sigue pendiente. |
+| El ahorro divide el pago total entre el consumo | **Decisión de modelo** | La propuesta lo aclara. En GDMTH el cargo por capacidad no lo elimina el sistema; afinar eso es ajuste comercial, no error de código. |
+
 ## 3. Lo que sigue abierto
 
 ### 3.1 No hay separación por empresa · **decisión pendiente, es la grande**
@@ -105,7 +120,14 @@ La base vive en Netlify DB. Falta definir cada cuándo se respalda, dónde queda
 quién la restaura y —lo que casi nunca se hace— probar una restauración completa antes de
 necesitarla.
 
-### 3.5 Rotación de la llave de sesiones
+### 3.5 Restaurar desde el respaldo
+
+El respaldo se descarga pero no hay función para volver a cargarlo en una instalación vacía.
+Es útil para migrar entre instalaciones y para recuperarse de un borrado. Tiene riesgo propio:
+una restauración a medias es peor que ninguna, así que debe hacerse en una transacción y con
+conteos por tabla antes y después.
+
+### 3.6 Rotación de la llave de sesiones
 
 No hay procedimiento escrito para cambiar `JWT_SECRET`. Cambiarla cierra todas las
 sesiones de todos, que es justo lo que se quiere en una emergencia, pero conviene tenerlo

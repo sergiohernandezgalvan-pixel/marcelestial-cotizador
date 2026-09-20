@@ -4,7 +4,7 @@ import {
   num, limpio, siguienteFolio, ultimoFolio, conFolio, siguienteFolioVale,
   totalDePartidas, fotoValida, firmaValida, claveNombre, claveRpu,
   nuevoCodigo, huellaDeCodigo, SIN_PASSWORD,
-  siguienteFolioOrden, materialDeProyecto,
+  siguienteFolioOrden, materialDeProyecto, revisarPrecios,
 } from "../lib/core.mjs";
 
 /* Busca un cliente que ya exista con el mismo nombre (sin acentos ni signos) o
@@ -264,6 +264,18 @@ export default async (req) => {
         " Tu información está guardada y vuelve completa al activarla." +
         (lic.contacto ? " Escríbenos al " + lic.contacto + "." : ""), 403);
 
+    /* Un vendedor no fija precios: lo que mande se contrasta con la tarifa,
+       el cotizador rápido o el catálogo. El administrador pasa directo. */
+    const precioAutorizado = async (partidas, tecnico) => {
+      if (esDueno(yo)) return null;
+      const filas = await db.sql`SELECT clave, valor FROM config
+                                  WHERE clave IN ('tarifas', 'rapido_fotovoltaico', 'dimensionamiento')`;
+      const config = Object.fromEntries(filas.map((f) => [f.clave, f.valor]));
+      const catalogo = await db.sql`SELECT clave, precio FROM catalogo`;
+      const r = revisarPrecios(partidas, tecnico, config, catalogo);
+      return r.ok ? null : r.mensaje;
+    };
+
     /* ============ ARRANQUE / SESIÓN ============ */
     if (ruta === "estado" && metodo === "GET") {
       const [r] = await db.sql`SELECT COUNT(*)::int AS n FROM usuarios`;
@@ -472,6 +484,12 @@ export default async (req) => {
       if (partes[2] === "cancelar" && metodo === "POST") {
         const motivo = limpio(cuerpo.motivo, 300);
         if (!motivo) return err("Escribe por qué se cancela la orden.");
+        /* Cancelar es del administrador o de quien la generó: un vendedor no
+           cancela el pedido de otro. */
+        const [dueno] = await db.sql`SELECT usuario_id FROM ordenes WHERE id = ${id}`;
+        if (!dueno) return err("Esa orden no existe.", 404);
+        if (!esDueno(yo) && dueno.usuario_id !== yo.id)
+          return err("Sólo el administrador o quien generó la orden puede cancelarla.", 403);
         const [o] = await db.sql`
           UPDATE ordenes SET cancelado_en = NOW(), cancelado_por = ${yo.id}, cancelado_motivo = ${motivo}
            WHERE id = ${id} AND cancelado_en IS NULL RETURNING *`;
@@ -480,6 +498,10 @@ export default async (req) => {
       }
 
       if (partes[2] === "enviada" && metodo === "POST") {
+        const [dueno] = await db.sql`SELECT usuario_id FROM ordenes WHERE id = ${id}`;
+        if (!dueno) return err("Esa orden no existe.", 404);
+        if (!esDueno(yo) && dueno.usuario_id !== yo.id)
+          return err("Sólo el administrador o quien generó la orden puede marcarla como enviada.", 403);
         const [o] = await db.sql`
           UPDATE ordenes SET enviada_en = NOW() WHERE id = ${id} AND cancelado_en IS NULL RETURNING *`;
         if (!o) return err("Esa orden no existe o está cancelada.", 404);
@@ -515,7 +537,7 @@ export default async (req) => {
         for (const k of campos) { c[k + "_hay"] = !!c[k]; delete c[k]; }
         return c;
       };
-      const [usuarios, clientes, cotizaciones, catalogo, movimientos, vales, seguimiento, conf] =
+      const [usuarios, clientes, cotizaciones, catalogo, movimientos, vales, seguimiento, conf, ordenes] =
         await Promise.all([
           db.sql`SELECT id, nombre, correo, rol, telefono, activo, creado_en FROM usuarios ORDER BY id`,
           db.sql`SELECT * FROM clientes ORDER BY id`,
@@ -525,6 +547,7 @@ export default async (req) => {
           db.sql`SELECT * FROM vales ORDER BY id`,
           db.sql`SELECT * FROM seguimiento ORDER BY id`,
           db.sql`SELECT clave, valor FROM config`,
+          db.sql`SELECT * FROM ordenes ORDER BY id`,
         ]);
       return json({
         generado_en: new Date().toISOString(),
@@ -540,6 +563,7 @@ export default async (req) => {
         movimientos,
         vales: vales.map((v) => sinFotos(v, ["recibio_firma"])),
         seguimiento,
+        ordenes,
         config: Object.fromEntries(conf.map((f) => [f.clave, f.valor])),
       });
     }
@@ -1178,54 +1202,32 @@ export default async (req) => {
         if (faltan.length) return err("Existencia insuficiente. " + faltan.join(" · "));
       }
 
-      /* Cabecera con folio; si dos almacenistas guardan al mismo tiempo y el
-         folio choca, se reintenta con el siguiente. */
-      const vale = await conFolio(async (folio) => {
-        const [v] = await db.sql`
-          INSERT INTO vales (folio, tipo, fecha, cliente_id, cotizacion_id, obra, referencia, usuario_id,
-                             entrego_nombre, recibio_nombre, recibio_tel, recibio_firma, vale_origen_id, notas)
-          VALUES (${folio}, ${tipo}, ${fecha}::date, ${clienteId}, ${cotId}, ${obra}, ${limpio(cuerpo.referencia, 120)},
-                  ${yo.id}, ${entrego}, ${recibio}, ${limpio(cuerpo.recibio_tel, 40)}, ${firmaValida(cuerpo.recibio_firma)},
-                  ${origenId}, ${limpio(cuerpo.notas, 1000)})
-          RETURNING *`;
-        return v;
-      }, 8, () => siguienteFolioVale(tipo));
-
-      /* Cada renglón se descuenta (o suma) y se registra en UNA sola instrucción:
-         si dos vales del mismo concepto se guardan al mismo tiempo, la base de
-         datos los pone en fila y ninguno deja la existencia negativa. */
-      const motivo = `Vale ${vale.folio} · ${obra}`.slice(0, 200);
-      const tipoMov = tipo;                  /* salida | entrada | devolucion */
-      const aplicadas = [];
-      for (const id of ids) {
-        const c = juntas.get(id);
-        const [fila] = tipo === "salida"
-          ? await db.sql`
-              WITH u AS (UPDATE catalogo SET existencia = existencia - ${c}, actualizado_en = NOW()
-                          WHERE id = ${id} AND existencia >= ${c} RETURNING existencia)
-              INSERT INTO movimientos (item_id, tipo, cantidad, saldo, motivo, usuario_id, cliente_id, fecha_entrega, vale_id)
-              SELECT ${id}, ${tipoMov}, ${c}, u.existencia, ${motivo}, ${yo.id}, ${clienteId}, ${fecha}::date, ${vale.id} FROM u
-              RETURNING saldo`
-          : await db.sql`
-              WITH u AS (UPDATE catalogo SET existencia = existencia + ${c}, actualizado_en = NOW()
-                          WHERE id = ${id} RETURNING existencia)
-              INSERT INTO movimientos (item_id, tipo, cantidad, saldo, motivo, usuario_id, cliente_id, fecha_entrega, vale_id)
-              SELECT ${id}, ${tipoMov}, ${c}, u.existencia, ${motivo}, ${yo.id}, ${clienteId}, ${fecha}::date, ${vale.id} FROM u
-              RETURNING saldo`;
-        if (!fila) {
-          /* Alguien se llevó ese material un instante antes. Se regresa lo
-             que ya se había descontado y el vale completo se rechaza. */
-          for (const idOk of aplicadas)
-            await db.sql`UPDATE catalogo SET existencia = existencia + ${juntas.get(idOk)} WHERE id = ${idOk}`;
-          await db.sql`DELETE FROM movimientos WHERE vale_id = ${vale.id}`;
-          await db.sql`DELETE FROM vales WHERE id = ${vale.id}`;
-          const it = porId.get(id);
-          const [ahora] = await db.sql`SELECT existencia FROM catalogo WHERE id = ${id}`;
-          return err(`Existencia insuficiente de ${it.clave}: pides ${c} y hay ${Number(ahora?.existencia ?? 0)} ${it.unidad}. El vale no se guardó.`, 409);
+      /* Todo el vale —cabecera y renglones— lo escribe una función de Postgres
+         en UNA transacción: o queda completo o no queda nada. Si el folio choca
+         porque dos almacenistas guardaron al mismo tiempo, se reintenta con el
+         siguiente; si falta existencia, la función lo dice y no se escribió nada. */
+      const lineas = ids.map((id) => ({ item_id: id, cantidad: juntas.get(id) }));
+      let valeId;
+      try {
+        valeId = await conFolio(async (folio) => {
+          const [r] = await db.sql`
+            SELECT registrar_vale(${folio}, ${tipo}, ${fecha}::date, ${clienteId}, ${cotId}, ${obra},
+                                  ${limpio(cuerpo.referencia, 120)}, ${yo.id}, ${entrego}, ${recibio},
+                                  ${limpio(cuerpo.recibio_tel, 40)}, ${firmaValida(cuerpo.recibio_firma)},
+                                  ${origenId}, ${limpio(cuerpo.notas, 1000)},
+                                  ${JSON.stringify(lineas)}::jsonb) AS id`;
+          return r.id;
+        }, 8, () => siguienteFolioVale(tipo));
+      } catch (e) {
+        const m = String(e?.message || "");
+        if (m.includes("EXISTENCIA|")) {
+          const [, clave, pide, hay, unidad] = m.split("EXISTENCIA|")[1].split("|");
+          return err(`Existencia insuficiente de ${clave}: pides ${Number(pide)} y hay ${Number(hay)} ${(unidad || "").split("\n")[0]}. El vale no se guardó.`, 409);
         }
-        aplicadas.push(id);
+        if (m.includes("CONCEPTO|")) return err("Uno de los conceptos ya no lleva control de inventario.", 409);
+        throw e;
       }
-      return json({ vale: await valeCompleto(vale.id) }, 201);
+      return json({ vale: await valeCompleto(valeId) }, 201);
     }
 
     if (ruta.startsWith("vale/")) {
@@ -1262,36 +1264,20 @@ export default async (req) => {
         if (v.cancelado_en) return err("Ese vale ya estaba cancelado.");
         const motivoCan = limpio(cuerpo.motivo, 300);
         if (!motivoCan) return err("Escribe el motivo de la cancelación.");
-        const lineas = await db.sql`
-          SELECT m.item_id, m.cantidad, c.clave, c.unidad, c.existencia
-            FROM movimientos m JOIN catalogo c ON c.id = m.item_id WHERE m.vale_id = ${id}`;
-        /* Cancelar una entrada saca material: tiene que haber de dónde. */
-        if (v.tipo !== "salida") {
-          const faltan = lineas.filter((l) => Number(l.existencia) < Number(l.cantidad))
-            .map((l) => `${l.clave}: hay ${Number(l.existencia)} ${l.unidad} y el vale trajo ${Number(l.cantidad)}`);
-          if (faltan.length) return err("No se puede cancelar: ese material ya salió. " + faltan.join(" · "));
+        /* La cancelación completa la hace una función de Postgres en una sola
+           transacción, con la fila del vale bloqueada: dos administradores
+           tocando «cancelar» al mismo tiempo no la cancelan dos veces. */
+        try {
+          await db.sql`SELECT cancelar_vale(${id}, ${yo.id}, ${motivoCan})`;
+        } catch (e) {
+          const m = String(e?.message || "");
+          if (m.includes("YACANCELADO|")) return err("Ese vale ya estaba cancelado.");
+          if (m.includes("EXISTENCIA|")) {
+            const [, clave, pide, hay, unidad] = m.split("EXISTENCIA|")[1].split("|");
+            return err(`No se puede cancelar: ese material ya salió. ${clave}: hay ${Number(hay)} ${(unidad || "").split("\n")[0]} y el vale trajo ${Number(pide)}.`, 409);
+          }
+          throw e;
         }
-        const motivoRev = `Cancelación de ${v.folio}: ${motivoCan}`.slice(0, 200);
-        for (const l of lineas) {
-          const c = Number(l.cantidad);
-          const [fila] = v.tipo === "salida"
-            ? await db.sql`
-                WITH u AS (UPDATE catalogo SET existencia = existencia + ${c}, actualizado_en = NOW()
-                            WHERE id = ${l.item_id} RETURNING existencia)
-                INSERT INTO movimientos (item_id, tipo, cantidad, saldo, motivo, usuario_id, cliente_id, vale_id)
-                SELECT ${l.item_id}, 'entrada', ${c}, u.existencia, ${motivoRev}, ${yo.id}, ${v.cliente_id}, ${id} FROM u
-                RETURNING saldo`
-            : await db.sql`
-                WITH u AS (UPDATE catalogo SET existencia = existencia - ${c}, actualizado_en = NOW()
-                            WHERE id = ${l.item_id} AND existencia >= ${c} RETURNING existencia)
-                INSERT INTO movimientos (item_id, tipo, cantidad, saldo, motivo, usuario_id, cliente_id, vale_id)
-                SELECT ${l.item_id}, 'salida', ${c}, u.existencia, ${motivoRev}, ${yo.id}, ${v.cliente_id}, ${id} FROM u
-                RETURNING saldo`;
-          if (!fila) return err(`No se pudo revertir ${l.clave}: ya no hay existencia suficiente.`, 409);
-        }
-        await db.sql`
-          UPDATE vales SET cancelado_en = NOW(), cancelado_por = ${yo.id}, motivo_cancelacion = ${motivoCan}
-           WHERE id = ${id}`;
         return json({ vale: await valeCompleto(id) });
       }
       return err("Método no permitido.", 405);
@@ -1448,6 +1434,7 @@ export default async (req) => {
         });
       }
       if (metodo === "POST") {
+        if (esAlmacen(yo)) return err("El almacén no cotiza.", 403);
         /* Tope de cotizaciones de la versión de prueba. Se revisa antes de
            escribir, y no borra nada: las que ya hizo siguen ahí. */
         const tope = topes();
@@ -1460,6 +1447,8 @@ export default async (req) => {
                        (contactoVentas() ? ` Escríbenos al ${contactoVentas()}.` : ""), 402);
         }
         const partidas = Array.isArray(cuerpo.partidas) ? cuerpo.partidas : [];
+        const malPrecio = await precioAutorizado(partidas, cuerpo.tecnico || {});
+        if (malPrecio) return err(malPrecio, 403);
         const c = await conFolio(async (folio) => {
           const [fila] = await db.sql`
             INSERT INTO cotizaciones (folio, cliente_id, vendedor_id, estatus, linea, tipo, tecnico, partidas, ahorro, recibo, recibo_foto, foto_producto, foto_sitio, sitio, comentarios, total)
@@ -1484,8 +1473,11 @@ export default async (req) => {
         const id = num(cuerpo.id);
         const [c] = await db.sql`SELECT * FROM cotizaciones WHERE id = ${id}`;
         if (!c) return err("Cotización no encontrada.", 404);
+        if (esAlmacen(yo)) return err("El almacén no cotiza.", 403);
         if (!esDueno(yo) && c.vendedor_id !== yo.id) return err("No puedes editar esta cotización.", 403);
         const partidas = Array.isArray(cuerpo.partidas) ? cuerpo.partidas : c.partidas;
+        const malPrecio = await precioAutorizado(partidas, cuerpo.tecnico || c.tecnico || {});
+        if (malPrecio) return err(malPrecio, 403);
         await db.sql`
           UPDATE cotizaciones SET
             cliente_id     = COALESCE(${num(cuerpo.cliente_id) || null}, cliente_id),

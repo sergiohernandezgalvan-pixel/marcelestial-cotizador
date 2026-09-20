@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.09.19e";
+const VERSION = "2026.09.20";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -905,8 +905,12 @@ async function pintarMaterial() {
       </div>
       <div class="acciones">
         <button class="btn pri sm" onclick="verOrden(${orden.id})">Ver la orden</button>
+        ${orden.enviada_en ? "" : `<button class="btn sec sm" onclick="marcarEnviada(${orden.id})">Ya la envié al proveedor</button>`}
         <button class="btn sec sm" onclick="cancelarOrden(${orden.id})">Cancelar orden</button>
-      </div>`;
+      </div>
+      ${orden.enviada_en ? "" : `<p style="font-size:12px;color:var(--slate);margin-top:8px">
+        Abrirla no la envía. Cuando ya la hayas mandado por WhatsApp o correo, márcala aquí para
+        que quede registrado.</p>`}`;
     return;
   }
 
@@ -1013,11 +1017,6 @@ window.verOrden = async (id) => {
         <div class="pie">${pieEmpresa()}</div>
       </div>`;
     abrirPrevia(orden.folio);
-    /* Se marca como enviada en cuanto se abre para imprimir o compartir: es el
-       momento en que sale del teléfono hacia el proveedor. */
-    if (!orden.enviada_en && !cancelada) {
-      try { await api("orden/" + id + "/enviada", { method: "POST" }); } catch {}
-    }
   } catch (x) { alert(x.message); }
 };
 
@@ -1035,6 +1034,14 @@ window.generarOrden = async () => {
               hileras: Math.max(1, Number(S.edHileras) || 1) } });
     await pintarMaterial();
     verOrden(orden.id);
+  } catch (x) { alert(x.message); }
+};
+
+window.marcarEnviada = async (id) => {
+  if (!confirm("¿Ya le mandaste esta orden al proveedor?")) return;
+  try {
+    await api("orden/" + id + "/enviada", { method: "POST" });
+    await pintarMaterial();
   } catch (x) { alert(x.message); }
 };
 
@@ -1546,7 +1553,9 @@ function tablaRecuperacion(c, inversion) {
         <div><span>Inversión</span><b>${money(inversion)}</b></div>
         <div><span>Ahorro mensual estimado</span><b>${money(mensual)}</b></div>
         ${kwhMes > 0 ? `<div><span>Energía generada al mes</span><b>${kwhMes.toLocaleString("es-MX")} kWh</b></div>` : ""}
-        <div><span>Inversión recuperada en</span><b>${filas.length} meses · ${anios} años</b></div>
+        <div><span>Inversión recuperada en</span><b>${saldo > 0.005
+          ? `más de ${TOPE} meses`
+          : `${filas.length} meses · ${anios} años`}</b></div>
       </div>
 
       <table class="rec">
@@ -1562,8 +1571,12 @@ function tablaRecuperacion(c, inversion) {
       </table>
 
       <p style="font-size:10.5px;color:#6b7280;margin-top:10px;line-height:1.5">
-        A partir de <b>${esc(ultima.etq)}</b> el sistema ya se pagó solo y todo lo que genera es
-        ahorro neto, durante el resto de su vida útil. El cálculo supone un ahorro constante:
+        ${saldo > 0.005
+          ? `Con el ahorro estimado, en ${TOPE} meses todavía quedan <b>${money(saldo)}</b> por
+             recuperar. Conviene revisar el dimensionamiento o el precio antes de presentar esta
+             propuesta.`
+          : `A partir de <b>${esc(ultima.etq)}</b> el sistema ya se pagó solo y todo lo que genera es
+             ahorro neto, durante el resto de su vida útil.`} El cálculo supone un ahorro constante:
         no considera la degradación natural de los paneles ni los aumentos de tarifa de CFE,
         que en la práctica se compensan entre sí. Los periodos son estimados y se recorren
         según la fecha real de interconexión.</p>
