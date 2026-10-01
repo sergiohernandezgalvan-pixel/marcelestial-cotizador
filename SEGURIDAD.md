@@ -82,6 +82,29 @@ corrigieron; dos eran decisiones de diseño que se dejan documentadas.
 | El respaldo no incluía órdenes ni permite restaurar | **Cierto a medias** | Las órdenes ya van. Fotos y firmas siguen fuera a propósito (límite de respuesta de la función). Restaurar desde el archivo sigue pendiente. |
 | El ahorro divide el pago total entre el consumo | **Decisión de modelo** | La propuesta lo aclara. En GDMTH el cargo por capacidad no lo elimina el sistema; afinar eso es ajuste comercial, no error de código. |
 
+## 2c. Corrección urgente (versión 2026.09.30)
+
+La revisión de precios de 2026.09.20 miraba la tarifa sólo en `tecnico.tarifa`,
+pero la pantalla «Desde el recibo de CFE» la guarda desde siempre en
+`recibo.tarifa`. Resultado: **toda vendedora que cotizara desde el recibo recibía
+«La cotización no indica la tarifa; no se puede validar el precio por módulo»** y
+no podía guardar. El administrador no lo veía porque no pasa por la revisión.
+Se detectó con un video de Angélica Berenice (30 sep 2026).
+
+Qué cambió:
+
+- `revisarPrecios` toma tarifa y tensión de `tecnico` o, si no vienen ahí, de `recibo`.
+- La app también manda `tecnico.tarifa` desde el recibo, por si acaso.
+- Al editar una cotización sólo se revisan las partidas nuevas o que cambiaron de
+  precio o cantidad. Mover el estatus de una cotización vieja (enviada, ganada) ya
+  no falla porque la tarifa haya subido después de hacerla.
+- 15 verificaciones nuevas (`prueba_recibo_vendedor.mjs`) y un recorrido en
+  navegador que repite paso a paso lo que hizo Angélica: **todo en verde**.
+
+Lección para la siguiente vez: una regla nueva en el servidor se prueba con el
+rol que la sufre (vendedor) y por cada pantalla que llega a ella, no sólo con el
+administrador.
+
 ## 3. Lo que sigue abierto
 
 ### 3.1 No hay separación por empresa · **decisión pendiente, es la grande**

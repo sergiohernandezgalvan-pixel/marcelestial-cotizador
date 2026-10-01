@@ -266,13 +266,13 @@ export default async (req) => {
 
     /* Un vendedor no fija precios: lo que mande se contrasta con la tarifa,
        el cotizador rápido o el catálogo. El administrador pasa directo. */
-    const precioAutorizado = async (partidas, tecnico) => {
+    const precioAutorizado = async (partidas, tecnico, recibo) => {
       if (esDueno(yo)) return null;
       const filas = await db.sql`SELECT clave, valor FROM config
                                   WHERE clave IN ('tarifas', 'rapido_fotovoltaico', 'dimensionamiento')`;
       const config = Object.fromEntries(filas.map((f) => [f.clave, f.valor]));
       const catalogo = await db.sql`SELECT clave, precio FROM catalogo`;
-      const r = revisarPrecios(partidas, tecnico, config, catalogo);
+      const r = revisarPrecios(partidas, tecnico, config, catalogo, recibo);
       return r.ok ? null : r.mensaje;
     };
 
@@ -1447,7 +1447,7 @@ export default async (req) => {
                        (contactoVentas() ? ` Escríbenos al ${contactoVentas()}.` : ""), 402);
         }
         const partidas = Array.isArray(cuerpo.partidas) ? cuerpo.partidas : [];
-        const malPrecio = await precioAutorizado(partidas, cuerpo.tecnico || {});
+        const malPrecio = await precioAutorizado(partidas, cuerpo.tecnico || {}, cuerpo.recibo || {});
         if (malPrecio) return err(malPrecio, 403);
         const c = await conFolio(async (folio) => {
           const [fila] = await db.sql`
@@ -1476,7 +1476,20 @@ export default async (req) => {
         if (esAlmacen(yo)) return err("El almacén no cotiza.", 403);
         if (!esDueno(yo) && c.vendedor_id !== yo.id) return err("No puedes editar esta cotización.", 403);
         const partidas = Array.isArray(cuerpo.partidas) ? cuerpo.partidas : c.partidas;
-        const malPrecio = await precioAutorizado(partidas, cuerpo.tecnico || c.tecnico || {});
+        /* Los precios se revisan sólo cuando las partidas cambian. Mover el
+           estatus de una cotización vieja (enviada, ganada) no debe fallar
+           porque la tarifa haya subido después de hacerla. */
+        /* Y de las partidas, sólo se revisan las que son nuevas o cambiaron de
+           precio o cantidad: una línea que ya estaba igual en la cotización
+           ya fue autorizada en su momento. */
+        const huella = (p) => `${String(p.clave || "").toUpperCase()}|${Number(p.precio) || 0}|${Number(p.cantidad) || 0}`;
+        const yaAutorizadas = new Set((Array.isArray(c.partidas) ? c.partidas : []).map(huella));
+        const partidasNuevas = Array.isArray(cuerpo.partidas)
+          ? cuerpo.partidas.filter((p) => !yaAutorizadas.has(huella(p)))
+          : [];
+        const malPrecio = partidasNuevas.length
+          ? await precioAutorizado(partidasNuevas, cuerpo.tecnico || c.tecnico || {}, cuerpo.recibo || c.recibo || {})
+          : null;
         if (malPrecio) return err(malPrecio, 403);
         await db.sql`
           UPDATE cotizaciones SET

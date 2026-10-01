@@ -269,14 +269,21 @@ export function totalDePartidas(partidas) {
      INVERSOR     → guía de inversores o precio del cotizador rápido
      PANEL, ESTRUCT, MATELEC, MANOBRA → parámetros del cotizador rápido
      cualquier otra clave → catálogo
+   La tarifa y la tensión pueden venir en «tecnico» (cotización formal) o en
+   «recibo» (pantalla «Desde el recibo de CFE», que es donde la app las guarda
+   desde siempre). Se aceptan de cualquiera de los dos: la primera versión de
+   esta revisión sólo miraba «tecnico» y rechazaba todas las cotizaciones del
+   recibo hechas por vendedores.
    Devuelve { ok } o { ok:false, mensaje }. El administrador nunca pasa por aquí. */
-export function revisarPrecios(partidas, tecnico, config, catalogo) {
+export function revisarPrecios(partidas, tecnico, config, catalogo, recibo) {
   const lista = Array.isArray(partidas) ? partidas : [];
   const tarifas = config.tarifas?.lista || [];
   const rapido = config.rapido_fotovoltaico || {};
   const guia = config.dimensionamiento?.guia_inversores || [];
   const porClave = new Map((catalogo || []).map((c) => [String(c.clave).toUpperCase(), Number(c.precio)]));
   const cerca = (a, b) => Math.abs(Number(a) - Number(b)) <= 0.5;
+  const claveTarifa = String(tecnico?.tarifa || recibo?.tarifa || "");
+  const tension = String(tecnico?.tension || recibo?.tension || "");
 
   for (const p of lista) {
     const clave = String(p.clave || "").toUpperCase();
@@ -284,10 +291,10 @@ export function revisarPrecios(partidas, tecnico, config, catalogo) {
     const cant = Number(p.cantidad) || 0;
 
     if (clave === "SISTEMA-FV") {
-      const tar = tarifas.find((t) => t.clave === tecnico?.tarifa);
+      const tar = tarifas.find((t) => String(t.clave) === claveTarifa);
       if (!tar) return { ok: false, mensaje: "La cotización no indica la tarifa; no se puede validar el precio por módulo." };
       const esc = (tar.escalones || [])
-        .filter((e) => e.tension === String(tecnico?.tension) || e.tension === "*")
+        .filter((e) => String(e.tension) === tension || e.tension === "*")
         .sort((a, b) => Number(a.hasta) - Number(b.hasta));
       if (!esc.length) return { ok: false, mensaje: "La tarifa no tiene precio para esa tensión." };
       const tope = Number(esc[esc.length - 1].hasta);

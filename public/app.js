@@ -1,5 +1,5 @@
 /* Cotizador Marcelestial — app cliente */
-const VERSION = "2026.09.20";
+const VERSION = "2026.09.30";
 const S = {
   token: localStorage.getItem("mc_token") || null,
   yo: null,
@@ -3093,6 +3093,7 @@ async function _guardarRecibo() {
         kwp: r.kwp.toFixed(2), paneles: String(r.usar),
         wpanel: String(Math.round((r.panel.kw || 0) * 1000)),
         inversores: String(r.inversores), tension: d.tension,
+        tarifa: r.tar.clave,   /* también va en «recibo»; aquí para que el servidor la encuentre de inmediato */
         capinversor: r.guia ? r.guia.capacidad_ac : "",
         marcainversor: r.guia ? ((paramTar().guia_marca || "") + " " + r.guia.modelo).trim() : "",
         produccion: String(Math.round(r.produccionMes * 2)),
